@@ -1,15 +1,50 @@
-const express = require("express");
+const mongoose = require("mongoose");
 
-const {
-  createReading,
-  getLatestReading,
-  getReadings
-} = require("../controllers/readingsController");
+const readingSchema = new mongoose.Schema(
+  {
+    deviceId: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 50
+    },
+    co2: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    co: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    no2: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    temperature: {
+      type: Number,
+      required: true,
+      min: -40,
+      max: 80
+    },
+    humidity: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 100
+    }
+  },
+  {
+    timestamps: true,
+    versionKey: false
+  }
+);
 
-const router = express.Router();
+readingSchema.index({
+  deviceId: 1,
+  createdAt: -1
+});
 
-router.post("/", createReading);
-router.get("/latest", getLatestReading);
-router.get("/", getReadings);
-
-module.exports = router;
+module.exports = mongoose.model("Reading", readingSchema);
