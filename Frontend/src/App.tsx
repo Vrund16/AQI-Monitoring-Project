@@ -46,7 +46,7 @@ export default function App() {
 
   // API Config state
   const [renderApiUrl, setRenderApiUrl] = useState<string>(DEFAULT_RENDER_ENDPOINT);
-  const [forceMock, setForceMock] = useState<boolean>(true);
+  const [forceMock, setForceMock] = useState<boolean>(false);
   const [isConfigOpen, setIsConfigOpen] = useState<boolean>(false);
   const [testPingStatus, setTestPingStatus] = useState<string | null>(null);
 
@@ -556,11 +556,7 @@ export default function App() {
   const fetchTelemetry = async () => {
     if (forceMock) {
       setSyncStatus('mock');
-      setCurrentReadings((prev) => {
-        const next = generateMockSensorReading(prev);
-        ingestReading(next);
-        return next;
-      });
+      setSyncStatus('error');
       return;
     }
 
@@ -579,14 +575,14 @@ export default function App() {
         throw new Error(`HTTP Error ${response.status}`);
       }
 
-      const payload = await response.json();
+      const d = payload.data ?? payload;
       const cleanData: SensorReading = {
-        temperature: +(payload.temperature ?? payload.temp ?? 24.0),
-        humidity: +(payload.humidity ?? payload.hum ?? 50.0),
-        co2: +(payload.co2 ?? payload.carbon_dioxide ?? 550),
-        co: +(payload.co ?? payload.carbon_monoxide ?? 1.5),
-        no2: +(payload.no2 ?? payload.nitrogen_dioxide ?? 20.0),
-        timestamp: payload.timestamp || new Date().toISOString(),
+        temperature: +(d.temperature ?? 24.0),
+        humidity:    +(d.humidity    ?? 50.0),
+        co2:         +(d.co2         ?? 550),
+        co:          +(d.co          ?? 1.5),
+        no2:         +(d.no2         ?? 20.0),
+        timestamp:   d.createdAt || d.timestamp || new Date().toISOString(),
       };
 
       setSyncStatus('connected');
