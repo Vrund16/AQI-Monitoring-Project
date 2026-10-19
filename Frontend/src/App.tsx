@@ -575,21 +575,36 @@ export default function App() {
         throw new Error(`HTTP Error ${response.status}`);
       }
 
+      const payload = await response.json();
       const d = payload.data ?? payload;
       const cleanData: SensorReading = {
-        temperature: +(d.temperature ?? 24.0),
-        humidity:    +(d.humidity    ?? 50.0),
-        co2:         +(d.co2         ?? 550),
-        co:          +(d.co          ?? 1.5),
-        no2:         +(d.no2         ?? 20.0),
-        timestamp:   d.createdAt || d.timestamp || new Date().toISOString(),
-      };
+         temperature: Number(d.temperature),
+         humidity: Number(d.humidity),
+         co2: Number(d.co2),
+         co: Number(d.co),
+         no2: Number(d.no2),
+         timestamp: d.createdAt ?? d.timestamp ?? new Date().toISOString(),
+        };
+        if (
+            !Number.isFinite(cleanData.temperature) ||
+            !Number.isFinite(cleanData.humidity) ||
+            !Number.isFinite(cleanData.co2) ||
+            !Number.isFinite(cleanData.co) ||
+            !Number.isFinite(cleanData.no2)
+          ) {
+            throw new Error("API returned invalid sensor readings");
+          }
 
       setSyncStatus('connected');
       ingestReading(cleanData);
-    } catch (err: any) {
-      console.warn('Render API call failed, falling back to simulated data:', err.message);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : String(err);
+
+      console.error("Render API fetch failed:", message);
       setSyncStatus('error');
+    }
+  };
 
       // Fallback to mock data so UI continues running seamlessly
       setCurrentReadings((prev) => {
