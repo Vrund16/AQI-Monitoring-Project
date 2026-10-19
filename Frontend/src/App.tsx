@@ -616,6 +616,17 @@ export default function App() {
   };
 
   // Polling loop: Countdown every second, trigger fetch every 5 seconds (Only when isPollingActive is true)
+  
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : String(err);
+
+      console.error('Render API fetch failed:', message);
+      setSyncStatus('error');
+    }
+  };
+
+  // Polling loop: Countdown every second, trigger fetch every 5 seconds
   useEffect(() => {
     if (!isPollingActive) return;
 
