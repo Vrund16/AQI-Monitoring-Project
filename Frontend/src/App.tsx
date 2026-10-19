@@ -624,7 +624,6 @@ export default function App() {
       console.error('Render API fetch failed:', message);
       setSyncStatus('error');
     }
-  };
 
   // Polling loop: Countdown every second, trigger fetch every 5 seconds
   useEffect(() => {
