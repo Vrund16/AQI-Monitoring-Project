@@ -32,7 +32,7 @@ interface SensorReading {
 }
 
 const MAX_CHART_POINTS = 20;
-const DEFAULT_RENDER_ENDPOINT = "https://aqi-monitoring-project.onrender.com/api/readings";
+const DEFAULT_RENDER_ENDPOINT = "https://aqi-monitoring-project.onrender.com/api/readings/latest";
 
 export default function App() {
   // Theme state: default to Bright Mode (false) as requested
