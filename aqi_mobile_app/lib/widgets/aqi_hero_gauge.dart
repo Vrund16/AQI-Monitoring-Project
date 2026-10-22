@@ -92,7 +92,8 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: isDark
                       ? const Color(0xFF1E293B)
@@ -118,7 +119,8 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white70 : const Color(0xFF334155),
+                        color:
+                            isDark ? Colors.white70 : const Color(0xFF334155),
                         fontFamily: 'monospace',
                       ),
                     ),
@@ -126,7 +128,8 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: aqiColor.withOpacity(0.14),
                   borderRadius: BorderRadius.circular(20),
@@ -150,7 +153,7 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'AQI MONITOR',
+                      'LIVE MONITOR',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -193,7 +196,8 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
                           fontSize: 54,
                           fontWeight: FontWeight.w900,
                           height: 1.0,
-                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                          color:
+                              isDark ? Colors.white : const Color(0xFF0F172A),
                           letterSpacing: -1.5,
                         ),
                       ),
@@ -203,7 +207,8 @@ class _AqiHeroGaugeState extends State<AqiHeroGauge>
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          color: isDark ? Colors.white38 : const Color(0xFF64748B),
+                          color:
+                              isDark ? Colors.white38 : const Color(0xFF64748B),
                           letterSpacing: 1.2,
                         ),
                       ),

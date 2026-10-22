@@ -1,12 +1,13 @@
 # AeroWatch - Air Quality Monitoring Mobile Application
 
-A cross-platform Flutter mobile application designed for real-time environmental telemetry and air quality monitoring. It connects seamlessly to the live hosted Render backend at `https://aqi-monitoring-project.onrender.com` or local ESP32 hardware instances.
+A cross-platform Flutter mobile application for real-time environmental telemetry. It reads the same live Render API endpoint as the AeroWatch web dashboard:
+`https://aqi-monitoring-project.onrender.com/api/readings/latest`.
 
 ---
 
 ## 📱 Features
 
-- **Real-Time AQI Hero Gauge**: Custom animated curved gauge with dynamic color shifting (Emerald Green, Amber, Orange, Crimson Red, Purple, Maroon) reflecting the current EPA/composite air quality index.
+- **Real-Time AQI Hero Gauge**: Custom animated curved gauge with dynamic color shifting (Emerald Green, Amber, Orange, Crimson Red, Purple, Maroon) reflecting the same composite score and category thresholds as the web dashboard.
 - **Gas Sensor Telemetry Cards**:
   - **CO₂ (Carbon Dioxide)**: Calibrated PPM scale with pure / drowsiness / hazard thresholds.
   - **CO (Carbon Monoxide)**: Parts-per-million detection with safety limits.
@@ -14,16 +15,14 @@ A cross-platform Flutter mobile application designed for real-time environmental
 - **Microclimate Monitoring**: Glassmorphic cards for Temperature (°C) and Relative Humidity (%) with comfort ratings.
 - **Live Sync Bar**:
   - Live connection status to Render backend (`https://aqi-monitoring-project.onrender.com`).
-  - Active countdown timer for auto-polling.
+  - Five-second polling countdown, matching the web dashboard.
   - Play / Pause polling toggle & instant manual refresh.
-- **Interactive Telemetry Curves**: `fl_chart` line graph plotting the last 20 sensor telemetry transmissions with interactive touch tooltips and metric switcher (AQI, CO₂, NO₂, Temp, Humidity).
+- **Interactive Telemetry Curves**: `fl_chart` line graph plotting recent backend history with interactive touch tooltips and metric switcher (AQI, CO₂, NO₂, Temp, Humidity).
 - **Health Advisories**: Contextual guidance on face masks (N95), room ventilation, outdoor exercise suitability, and air purifier fan speeds.
 - **History & Transmission Logs**: Chronological log of past sensor transmissions with device ID (`ESP32_002`), exact timestamps, and reading metrics.
 - **Settings & Diagnostic Suite**:
-  - Configurable Backend API Endpoint with one-tap ping & MongoDB database health inspection (`/api/health`).
-  - Polling interval adjustment (3s, 5s, 10s, 30s).
-  - Built-in Simulation / Mock Walk generator for offline demoing.
-  - Test telemetry transmitter to simulate ESP32 packets to the live database (`POST /api/readings`).
+  - Configurable full readings endpoint with one-tap ping & MongoDB database health inspection (`/api/health`).
+  - Uses live API readings only; connection failures are shown instead of replacing sensor data with simulated values.
   - Theme toggler: Sleek Deep Obsidian dark mode & bright clean light mode.
 
 ---
@@ -71,4 +70,3 @@ A cross-platform Flutter mobile application designed for real-time environmental
 | `https://aqi-monitoring-project.onrender.com/api/readings/latest` | GET | Fetches the latest sensor packet |
 | `https://aqi-monitoring-project.onrender.com/api/readings?limit=20` | GET | Fetches past 20 sensor packets for charts |
 | `https://aqi-monitoring-project.onrender.com/api/health` | GET | Verifies API and MongoDB database status |
-| `https://aqi-monitoring-project.onrender.com/api/readings` | POST | Ingests new sensor readings from ESP32 |

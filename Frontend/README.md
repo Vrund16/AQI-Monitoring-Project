@@ -32,3 +32,12 @@ All unnecessary dependencies have been removed. The repository contains only the
    npm run dev
    ```
 3. Open your browser at **`http://localhost:3000`**.
+
+### Render frontend API environment variable
+In the Render dashboard, set `VITE_API_URL` in the **frontend service's Environment** settings to:
+
+```text
+https://aqi-monitoring-project.onrender.com/api/readings/latest
+```
+
+Vite reads this variable when building the frontend, so trigger a new deploy after changing it. If it is unset, the frontend uses the URL above by default. This is the data API the frontend calls; it does not replace the backend service that provides the readings.

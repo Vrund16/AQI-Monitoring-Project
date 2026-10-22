@@ -1,1619 +1,526 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Chart as ChartJS,
-  registerables,
-} from 'chart.js';
-import {
-  Wind,
-  Sun,
+  Activity,
+  AirVent,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Cloud,
+  CloudCog,
+  Droplets,
+  ExternalLink,
+  FlaskConical,
+  Leaf,
+  LoaderCircle,
   Moon,
+  Pause,
   Play,
-  Square,
   RefreshCw,
-  Settings,
+  Settings2,
   ShieldCheck,
+  Sun,
+  Thermometer,
+  Wind,
+  X,
 } from 'lucide-react';
 
-// Register all Chart.js controllers and elements
-ChartJS.register(...registerables);
-
 interface SensorReading {
-  temperature: number; // °C
-  humidity: number; // %
-  co2: number; // ppm
-  co: number; // ppm
-  no2: number; // ppb
+  deviceId: string;
+  temperature: number;
+  humidity: number;
+  co2: number;
+  co: number;
+  no2: number;
   timestamp: string;
 }
 
-const MAX_CHART_POINTS = 20;
-const DEFAULT_RENDER_ENDPOINT = "https://aqi-monitoring-project.onrender.com/api/readings/latest";
+interface TrendPoint {
+  timestamp: number;
+  temperature: number;
+  humidity: number;
+  co2: number;
+}
+
+const DEFAULT_API_URL = import.meta.env.VITE_API_URL?.trim()
+  || 'https://aqi-monitoring-project.onrender.com/api/readings/latest';
+const REFRESH_SECONDS = 5;
+const MAX_TREND_POINTS = 20;
+
+function parseReading(payload: unknown): SensorReading {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('The API returned an invalid response.');
+  }
+
+  const response = payload as Record<string, unknown>;
+  const data = response.data && typeof response.data === 'object'
+    ? response.data as Record<string, unknown>
+    : response;
+  const values = {
+    temperature: Number(data.temperature),
+    humidity: Number(data.humidity),
+    co2: Number(data.co2),
+    co: Number(data.co),
+    no2: Number(data.no2),
+  };
+
+  if (Object.values(values).some((value) => !Number.isFinite(value))) {
+    throw new Error('The API response is missing valid sensor readings.');
+  }
+
+  const timestamp = data.createdAt ?? data.timestamp;
+  return {
+    deviceId: typeof data.deviceId === 'string' ? data.deviceId : 'ESP32_DEV',
+    ...values,
+    timestamp: typeof timestamp === 'string' ? timestamp : new Date().toISOString(),
+  };
+}
+
+function getAqi(score: number) {
+  if (score <= 50) return { label: 'Good', color: 'green' };
+  if (score <= 100) return { label: 'Moderate', color: 'amber' };
+  if (score <= 150) return { label: 'Unhealthy for sensitive groups', color: 'orange' };
+  if (score <= 200) return { label: 'Unhealthy', color: 'red' };
+  if (score <= 300) return { label: 'Very unhealthy', color: 'purple' };
+  return { label: 'Hazardous', color: 'maroon' };
+}
+
+function getHealthAdvice(score: number) {
+  if (score <= 50) {
+    return 'Air quality is pristine. Conditions are suitable for outdoor activities and fresh ventilation.';
+  }
+  if (score <= 100) {
+    return 'Air quality is acceptable. Sensitive individuals may consider limiting prolonged outdoor exertion.';
+  }
+  if (score <= 150) {
+    return 'Pollutant levels are elevated. Sensitive groups may experience symptoms; consider reducing prolonged outdoor activity.';
+  }
+  return 'Pollutant levels are high. Limit outdoor exposure, improve indoor filtration, and monitor conditions.';
+}
+
+function getAlert(value: number, warning: number, danger: number) {
+  if (value >= danger) return { label: 'Hazard', tone: 'red' };
+  if (value >= warning) return { label: 'Warning', tone: 'amber' };
+  return { label: 'Safe', tone: 'green' };
+}
+
+function formatTime(value?: string | number) {
+  if (!value) return '--:--:--';
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function TrendChart({
+  points,
+  metric,
+  color,
+  unit,
+  value,
+}: {
+  points: TrendPoint[];
+  metric: 'temperature' | 'humidity' | 'co2';
+  color: string;
+  unit: string;
+  value: number;
+}) {
+  const chartWidth = 600;
+  const chartHeight = 150;
+  const pad = 10;
+  const values = points.map((point) => point[metric]);
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const spread = Math.max(max - min, 1);
+  const coordinates = points.map((point, index) => ({
+    x: points.length === 1 ? chartWidth / 2 : pad + (index / (points.length - 1)) * (chartWidth - pad * 2),
+    y: chartHeight - pad - ((point[metric] - min) / spread) * (chartHeight - pad * 2),
+  }));
+  const path = coordinates.map((point, index) =>
+    `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`,
+  ).join(' ');
+  const fillPath = coordinates.length
+    ? `${path} L ${coordinates[coordinates.length - 1].x} ${chartHeight} L ${coordinates[0].x} ${chartHeight} Z`
+    : '';
+
+  return (
+    <article className="panel trend-card">
+      <div className="panel-heading">
+        <div className="trend-title">
+          <span className={`metric-dot ${color}`} />
+          <div>
+            <h3>{metric === 'co2' ? 'CO₂ concentration' : metric === 'temperature' ? 'Temperature' : 'Humidity'}</h3>
+            <p>Recent live readings</p>
+          </div>
+        </div>
+        <strong className="trend-current">
+          {metric === 'temperature' ? value.toFixed(1) : metric === 'humidity' ? value.toFixed(1) : Math.round(value)}
+          <span>{unit}</span>
+        </strong>
+      </div>
+      {points.length < 2 ? (
+        <div className="chart-empty">
+          <Activity size={18} />
+          <span>Trend appears as live readings arrive</span>
+        </div>
+      ) : (
+        <div className="chart-wrap">
+          <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={`${metric} live trend`}>
+            <defs>
+              <linearGradient id={`fill-${metric}`} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="currentColor" stopOpacity=".24" />
+                <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {[0.25, 0.5, 0.75].map((fraction) => (
+              <line
+                key={fraction}
+                x1="0"
+                x2={chartWidth}
+                y1={chartHeight * fraction}
+                y2={chartHeight * fraction}
+                className="chart-grid-line"
+              />
+            ))}
+            <path d={fillPath} fill={`url(#fill-${metric})`} className={`chart-area ${color}`} />
+            <path d={path} fill="none" className={`chart-line ${color}`} />
+            {coordinates.length > 0 && (
+              <circle
+                cx={coordinates[coordinates.length - 1].x}
+                cy={coordinates[coordinates.length - 1].y}
+                r="4"
+                className={`chart-point ${color}`}
+              />
+            )}
+          </svg>
+          <div className="chart-time-labels">
+            <span>{formatTime(points[0]?.timestamp)}</span>
+            <span>{formatTime(points[points.length - 1]?.timestamp)}</span>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
 
 export default function App() {
-  // Theme state: default to Bright Mode (false) as requested
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [draftUrl, setDraftUrl] = useState(DEFAULT_API_URL);
+  const [reading, setReading] = useState<SensorReading | null>(null);
+  const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<number>();
+  const [countdown, setCountdown] = useState(REFRESH_SECONDS);
+  const [isPolling, setIsPolling] = useState(true);
+  const [isDark, setIsDark] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  const [connectionMessage, setConnectionMessage] = useState<string>();
 
-  // Start / Stop Dashboard Polling state (default running)
-  const [isPollingActive, setIsPollingActive] = useState<boolean>(true);
-  const [countdown, setCountdown] = useState<number>(5);
-  const [lastSyncTime, setLastSyncTime] = useState<string>('Just now');
-  const [syncStatus, setSyncStatus] = useState<'connected' | 'mock' | 'error'>('mock');
-
-  // API Config state
-  const [renderApiUrl, setRenderApiUrl] = useState<string>(DEFAULT_RENDER_ENDPOINT);
-  const [forceMock, setForceMock] = useState<boolean>(false);
-  const [isConfigOpen, setIsConfigOpen] = useState<boolean>(false);
-  const [testPingStatus, setTestPingStatus] = useState<string | null>(null);
-
-  // Current Sensor Values (The 5 Target Metrics)
-  const [currentReadings, setCurrentReadings] = useState<SensorReading>({
-    temperature: 24.2,
-    humidity: 48.5,
-    co2: 560,
-    co: 1.6,
-    no2: 19.8,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Animated displayed readings for fluid number transitions matching gauge easing
-  const [displayedReadings, setDisplayedReadings] = useState<SensorReading>({
-    temperature: 24.2,
-    humidity: 48.5,
-    co2: 560,
-    co: 1.6,
-    no2: 19.8,
-    timestamp: new Date().toISOString(),
-  });
-  const displayedReadingsRef = useRef<SensorReading>(displayedReadings);
-  const animFrameRef = useRef<number | null>(null);
-
-  const animateReadingsTo = (target: SensorReading) => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-    }
-
-    const start = { ...displayedReadingsRef.current };
-    const startTime = performance.now();
-    const duration = 1800; // 1.8s smooth fluid easing over 5s poll cycle
-
-    const step = (now: number) => {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      // easeOutCubic curve for organic deceleration
-      const ease = 1 - Math.pow(1 - progress, 3);
-
-      const current: SensorReading = {
-        temperature: +(start.temperature + (target.temperature - start.temperature) * ease).toFixed(2),
-        humidity: +(start.humidity + (target.humidity - start.humidity) * ease).toFixed(2),
-        co2: Math.round(start.co2 + (target.co2 - start.co2) * ease),
-        co: +(start.co + (target.co - start.co) * ease).toFixed(1),
-        no2: +(start.no2 + (target.no2 - start.no2) * ease).toFixed(1),
-        timestamp: target.timestamp,
-      };
-
-      displayedReadingsRef.current = current;
-      setDisplayedReadings(current);
-
-      if (progress < 1) {
-        animFrameRef.current = requestAnimationFrame(step);
-      }
-    };
-
-    animFrameRef.current = requestAnimationFrame(step);
-  };
-
-  // History buffers for the 2 line graphs (up to 20 points)
-  const historyRef = useRef<{
-    labels: string[];
-    temperatures: number[];
-    humidities: number[];
-  }>({
-    labels: [],
-    temperatures: [],
-    humidities: [],
-  });
-
-  // Canvas refs
-  const canvasCO2Ref = useRef<HTMLCanvasElement | null>(null);
-  const canvasCORef = useRef<HTMLCanvasElement | null>(null);
-  const canvasNO2Ref = useRef<HTMLCanvasElement | null>(null);
-  const canvasTempRef = useRef<HTMLCanvasElement | null>(null);
-  const canvasHumidityRef = useRef<HTMLCanvasElement | null>(null);
-
-  // Chart instance refs
-  const chartCO2Instance = useRef<ChartJS | null>(null);
-  const chartCOInstance = useRef<ChartJS | null>(null);
-  const chartNO2Instance = useRef<ChartJS | null>(null);
-  const chartTempInstance = useRef<ChartJS | null>(null);
-  const chartHumidityInstance = useRef<ChartJS | null>(null);
-
-  // Initialize seed historical data (20 points)
-  useEffect(() => {
-    const labels: string[] = [];
-    const temps: number[] = [];
-    const hums: number[] = [];
-    const now = Date.now();
-
-    for (let i = MAX_CHART_POINTS - 1; i >= 0; i--) {
-      const time = new Date(now - i * 5000);
-      labels.push(time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      temps.push(+(23.5 + Math.sin(i / 2) * 0.8 + (Math.random() - 0.5) * 0.3).toFixed(1));
-      hums.push(+(47.0 + Math.cos(i / 2) * 2.2 + (Math.random() - 0.5) * 0.5).toFixed(1));
-    }
-
-    historyRef.current = { labels, temperatures: temps, humidities: hums };
-    setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-  }, []);
-
-  // Sync dark mode class on HTML root
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [isDarkMode]);
-
-  // Safe limit definitions for environmental sensors
-  type AlertLevel = 'safe' | 'warning' | 'danger';
-
-  const SENSOR_SAFE_LIMITS = {
-    co2: {
-      warningThreshold: 1000,
-      dangerThreshold: 1500,
-      safeText: '<800 (Pure)',
-      warningText: '1000 - 1400',
-      dangerText: '>1500 (Drowsy)',
-      rangeText: '0 - 2000 ppm',
-      alertWarningText: 'CAUTION: >1000',
-      alertDangerText: 'HAZARD: >1500',
-    },
-    co: {
-      warningThreshold: 9.0,
-      dangerThreshold: 25.0,
-      safeText: '<9.0 (Safe)',
-      warningText: '10 - 25',
-      dangerText: '>25 (Hazard)',
-      rangeText: '0 - 50 ppm',
-      alertWarningText: 'CAUTION: ≥9.0',
-      alertDangerText: 'HAZARD: ≥25',
-    },
-    no2: {
-      warningThreshold: 54.0,
-      dangerThreshold: 100.0,
-      safeText: '<53 (Good)',
-      warningText: '54 - 100',
-      dangerText: '>100 (High)',
-      rangeText: '0 - 150 ppb',
-      alertWarningText: 'CAUTION: ≥54',
-      alertDangerText: 'HAZARD: >100',
-    },
-  };
-
-  const getSensorAlertLevel = (sensor: 'co2' | 'co' | 'no2', value: number): AlertLevel => {
-    const limits = SENSOR_SAFE_LIMITS[sensor];
-    if (value >= limits.dangerThreshold) return 'danger';
-    if (value >= limits.warningThreshold) return 'warning';
-    return 'safe';
-  };
-
-  // Precision needle indicator plugin that tracks gauge fill edge during easing transitions
-  const gaugeNeedlePlugin = {
-    id: 'gaugeNeedle',
-    afterDatasetDraw(chart: ChartJS, args: any) {
-      if (args.index !== 0) return;
-      const meta = chart.getDatasetMeta(0);
-      if (!meta || !meta.data || !meta.data[0]) return;
-      const arc = meta.data[0] as any;
-      if (!arc.getProps) return;
-
-      const props = arc.getProps(['x', 'y', 'innerRadius', 'outerRadius', 'endAngle'], true);
-      if (!props || typeof props.endAngle !== 'number') return;
-      const { x, y, innerRadius, outerRadius, endAngle } = props;
-
-      const { ctx } = chart;
-      ctx.save();
-
-      // Needle pointer spanning across the arc from inner to outer radius
-      const needleInnerR = innerRadius - 3;
-      const needleOuterR = outerRadius + 5;
-
-      const x1 = x + needleInnerR * Math.cos(endAngle);
-      const y1 = y + needleInnerR * Math.sin(endAngle);
-      const x2 = x + needleOuterR * Math.cos(endAngle);
-      const y2 = y + needleOuterR * Math.sin(endAngle);
-
-      const activeColor = (chart.data.datasets[0].backgroundColor as string[])?.[0] || '#10b981';
-      const isDanger = activeColor === '#ef4444';
-      const isWarning = activeColor === '#f59e0b';
-
-      // Glowing indicator needle line with color-coordinated shadow
-      ctx.shadowColor = isDanger
-        ? 'rgba(239, 68, 68, 0.95)'
-        : isWarning
-        ? 'rgba(245, 158, 11, 0.95)'
-        : 'rgba(16, 185, 129, 0.75)';
-      ctx.shadowBlur = isDanger || isWarning ? 12 : 8;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 3;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      // High-visibility needle pointer tip bead
-      ctx.shadowColor = isDanger
-        ? 'rgba(239, 68, 68, 1)'
-        : isWarning
-        ? 'rgba(245, 158, 11, 1)'
-        : 'rgba(16, 185, 129, 0.9)';
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = activeColor;
-      ctx.beginPath();
-      ctx.arc(x2, y2, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Visual Alert beacon ring when exceeding safe limits
-      if (isDanger || isWarning) {
-        ctx.beginPath();
-        ctx.arc(x2, y2, 8, 0, Math.PI * 2);
-        ctx.fillStyle = isDanger ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.35)';
-        ctx.fill();
-      }
-
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      ctx.restore();
-    },
-  };
-
-  // Create Half-Circle Gauge Helper with smooth easing animation and alert thresholds
-  const initGaugeChart = (
-    canvas: HTMLCanvasElement,
-    initialVal: number,
-    minVal: number,
-    maxVal: number,
-    sensorType: 'co2' | 'co' | 'no2'
-  ): ChartJS => {
-    const ctx = canvas.getContext('2d')!;
-    const pct = Math.min(Math.max((initialVal - minVal) / (maxVal - minVal), 0), 1);
-    const alertLevel = getSensorAlertLevel(sensorType, initialVal);
-    let initialColor = '#10b981';
-    if (alertLevel === 'danger') initialColor = '#ef4444';
-    else if (alertLevel === 'warning') initialColor = '#f59e0b';
-
-    return new ChartJS(ctx, {
-      type: 'doughnut',
-      data: {
-        datasets: [
-          {
-            data: [pct * 100, (1 - pct) * 100],
-            backgroundColor: [
-              initialColor,
-              isDarkMode ? 'rgba(30, 41, 59, 0.45)' : 'rgba(203, 213, 225, 0.8)',
-            ],
-            borderWidth: 0,
-            borderRadius: [6, 0],
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        circumference: 180,
-        rotation: 270,
-        cutout: '75%',
-        animation: {
-          duration: 1800,
-          easing: 'easeOutCubic',
-        },
-        plugins: {
-          tooltip: { enabled: false },
-        },
-      } as any,
-      plugins: [gaugeNeedlePlugin as any],
-    });
-  };
-
-  // Update Half Gauge Chart with smooth easing transition and alert color shifts over the 5-second polling cycle
-  const updateGauge = (
-    chart: ChartJS | null,
-    val: number,
-    minVal: number,
-    maxVal: number,
-    sensorType: 'co2' | 'co' | 'no2'
-  ) => {
-    if (!chart) return;
-    const pct = Math.min(Math.max((val - minVal) / (maxVal - minVal), 0), 1);
-    chart.data.datasets[0].data = [pct * 100, (1 - pct) * 100];
-
-    const alertLevel = getSensorAlertLevel(sensorType, val);
-    let gaugeColor = '#10b981'; // Bright green for safe
-    if (alertLevel === 'danger') {
-      gaugeColor = '#ef4444'; // Red for critical/hazard limit exceeded
-    } else if (alertLevel === 'warning') {
-      gaugeColor = '#f59e0b'; // Amber for warning limit exceeded
-    }
-
-    chart.data.datasets[0].backgroundColor = [
-      gaugeColor,
-      isDarkMode ? 'rgba(30, 41, 59, 0.45)' : 'rgba(203, 213, 225, 0.8)',
-    ];
-    // Trigger fluid easing animation
-    chart.update();
-  };
-
-  // Create Line Graph Helper with bright green gradient fill & pure black labels in bright mode
-  const initLineGraph = (
-    canvas: HTMLCanvasElement,
-    label: string,
-    unit: string,
-    initialLabels: string[],
-    initialData: number[]
-  ): ChartJS => {
-    const ctx = canvas.getContext('2d')!;
-
-    // Create bright green gradient fill
-    const gradient = ctx.createLinearGradient(0, 0, 0, 200);
-    gradient.addColorStop(0, 'rgba(16, 185, 129, 0.38)');
-    gradient.addColorStop(0.65, 'rgba(16, 185, 129, 0.10)');
-    gradient.addColorStop(1, 'rgba(16, 185, 129, 0.00)');
-
-    return new ChartJS(ctx, {
-      type: 'line',
-      data: {
-        labels: [...initialLabels],
-        datasets: [
-          {
-            label: label,
-            data: [...initialData],
-            borderColor: '#10b981',
-            borderWidth: 2.2,
-            pointBackgroundColor: '#10b981',
-            pointBorderColor: isDarkMode ? '#090d16' : '#ffffff',
-            pointBorderWidth: 1.5,
-            pointRadius: 2.5,
-            pointHoverRadius: 5,
-            fill: true,
-            backgroundColor: gradient,
-            tension: 0.35,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: {
-          duration: 400,
-          easing: 'easeInOutQuad',
-        },
-        interaction: {
-          intersect: false,
-          mode: 'index',
-        },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-            titleColor: isDarkMode ? '#94a3b8' : '#000000',
-            bodyColor: isDarkMode ? '#34d399' : '#000000',
-            borderColor: 'rgba(16, 185, 129, 0.4)',
-            borderWidth: 1.5,
-            padding: 8,
-            displayColors: false,
-            callbacks: {
-              title: (items) => (items.length > 0 ? `Time: ${items[0].label}` : ''),
-              label: (ctx) => `${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)} ${unit}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: {
-              color: isDarkMode ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.09)',
-            },
-            ticks: {
-              // Pure black font in bright mode, bold weight
-              color: isDarkMode ? '#64748b' : '#000000',
-              font: { family: '"JetBrains Mono"', size: 9, weight: 700 },
-              maxTicksLimit: 6,
-            },
-          },
-          y: {
-            grid: {
-              color: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.09)',
-            },
-            ticks: {
-              precision: 0,
-              // Pure black font in bright mode, bold weight, whole numbers only on Y-axis
-              color: isDarkMode ? '#64748b' : '#000000',
-              font: { family: '"JetBrains Mono"', size: 9, weight: 700 },
-              callback: (val) => `${Math.round(Number(val))} ${unit}`,
-            },
-          },
-        },
-      },
-    });
-  };
-
-  // Initialize all 5 charts
-  useEffect(() => {
-    if (
-      canvasCO2Ref.current &&
-      canvasCORef.current &&
-      canvasNO2Ref.current &&
-      canvasTempRef.current &&
-      canvasHumidityRef.current
-    ) {
-      chartCO2Instance.current?.destroy();
-      chartCOInstance.current?.destroy();
-      chartNO2Instance.current?.destroy();
-      chartTempInstance.current?.destroy();
-      chartHumidityInstance.current?.destroy();
-
-      // Gauges (CO2, CO, NO2)
-      chartCO2Instance.current = initGaugeChart(canvasCO2Ref.current, currentReadings.co2, 0, 2000, 'co2');
-      chartCOInstance.current = initGaugeChart(canvasCORef.current, currentReadings.co, 0, 50, 'co');
-      chartNO2Instance.current = initGaugeChart(canvasNO2Ref.current, currentReadings.no2, 0, 150, 'no2');
-
-      // Line graphs (Temperature & Humidity)
-      chartTempInstance.current = initLineGraph(
-        canvasTempRef.current,
-        'Temperature',
-        '°C',
-        historyRef.current.labels,
-        historyRef.current.temperatures
-      );
-      chartHumidityInstance.current = initLineGraph(
-        canvasHumidityRef.current,
-        'Humidity',
-        '%',
-        historyRef.current.labels,
-        historyRef.current.humidities
-      );
-    }
-
-    return () => {
-      chartCO2Instance.current?.destroy();
-      chartCOInstance.current?.destroy();
-      chartNO2Instance.current?.destroy();
-      chartTempInstance.current?.destroy();
-      chartHumidityInstance.current?.destroy();
-    };
-  }, [isDarkMode]);
-
-  // Mock generator function
-  const generateMockSensorReading = (prev: SensorReading): SensorReading => {
-    const tempDelta = (Math.random() - 0.48) * 0.4;
-    const humDelta = (Math.random() - 0.5) * 0.8;
-    const co2Delta = (Math.random() - 0.48) * 25;
-    const coDelta = (Math.random() - 0.5) * 0.15;
-    const no2Delta = (Math.random() - 0.5) * 0.9;
-
-    const newTemp = +(Math.min(Math.max(prev.temperature + tempDelta, 18.0), 32.0)).toFixed(1);
-    const newHumidity = +(Math.min(Math.max(prev.humidity + humDelta, 30.0), 80.0)).toFixed(1);
-    const newCO2 = Math.round(Math.min(Math.max(prev.co2 + co2Delta, 400), 1600));
-    const newCO = +(Math.min(Math.max(prev.co + coDelta, 0.2), 25.0)).toFixed(1);
-    const newNO2 = +(Math.min(Math.max(prev.no2 + no2Delta, 5.0), 95.0)).toFixed(1);
-
-    return {
-      temperature: newTemp,
-      humidity: newHumidity,
-      co2: newCO2,
-      co: newCO,
-      no2: newNO2,
-      timestamp: new Date().toISOString(),
-    };
-  };
-
-  // Ingest reading and push to charts
-  const ingestReading = (data: SensorReading) => {
-    setCurrentReadings(data);
-    animateReadingsTo(data);
-    const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    setLastSyncTime(timeStr);
-
-    // Update Gauges with alert state
-    updateGauge(chartCO2Instance.current, data.co2, 0, 2000, 'co2');
-    updateGauge(chartCOInstance.current, data.co, 0, 50, 'co');
-    updateGauge(chartNO2Instance.current, data.no2, 0, 150, 'no2');
-
-    // Update Line Graphs (Keep max 20 data points, shift older out)
-    if (chartTempInstance.current) {
-      chartTempInstance.current.data.labels?.push(timeStr);
-      chartTempInstance.current.data.datasets[0].data.push(data.temperature);
-      if ((chartTempInstance.current.data.labels?.length ?? 0) > MAX_CHART_POINTS) {
-        chartTempInstance.current.data.labels?.shift();
-        chartTempInstance.current.data.datasets[0].data.shift();
-      }
-      chartTempInstance.current.update('none');
-    }
-
-    if (chartHumidityInstance.current) {
-      chartHumidityInstance.current.data.labels?.push(timeStr);
-      chartHumidityInstance.current.data.datasets[0].data.push(data.humidity);
-      if ((chartHumidityInstance.current.data.labels?.length ?? 0) > MAX_CHART_POINTS) {
-        chartHumidityInstance.current.data.labels?.shift();
-        chartHumidityInstance.current.data.datasets[0].data.shift();
-      }
-      chartHumidityInstance.current.update('none');
-    }
-  };
-
-  // Perform one fetch cycle
-  const fetchTelemetry = async () => {
-    if (forceMock) {
-      setSyncStatus('mock');
-      return;
-    }
-
+  const fetchLatest = useCallback(async () => {
+    setIsLoading(true);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeout = window.setTimeout(() => controller.abort(), 12000);
 
     try {
-      const response = await fetch(renderApiUrl, {
-        method: 'GET',
+      const response = await fetch(apiUrl, {
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
+      if (!response.ok) throw new Error(`Server returned HTTP ${response.status}.`);
 
-      if (!response.ok) {
-        throw new Error(`HTTP Error ${response.status}`);
-      }
-
-      const payload = await response.json();
-      const d = payload?.data ?? payload;
-
-      const cleanData: SensorReading = {
-        temperature: Number(d.temperature),
-        humidity: Number(d.humidity),
-        co2: Number(d.co2),
-        co: Number(d.co),
-        no2: Number(d.no2),
-        timestamp: d.createdAt ?? d.timestamp ?? new Date().toISOString(),
-      };
-
-      if (
-        !Number.isFinite(cleanData.temperature) ||
-        !Number.isFinite(cleanData.humidity) ||
-        !Number.isFinite(cleanData.co2) ||
-        !Number.isFinite(cleanData.co) ||
-        !Number.isFinite(cleanData.no2)
-      ) {
-        throw new Error('API returned invalid sensor readings');
-      }
-
-      setSyncStatus('connected');
-      ingestReading(cleanData);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('Render API fetch failed:', message);
-      setSyncStatus('error');
+      const next = parseReading(await response.json());
+      const receivedAt = Date.now();
+      setReading(next);
+      setLastUpdated(receivedAt);
+      setError(undefined);
+      setConnectionMessage(undefined);
+      setTrend((current) => [
+        ...current,
+        {
+          timestamp: receivedAt,
+          temperature: next.temperature,
+          humidity: next.humidity,
+          co2: next.co2,
+        },
+      ].slice(-MAX_TREND_POINTS));
+    } catch (cause) {
+      const message = cause instanceof Error
+        ? cause.name === 'AbortError' ? 'The API request timed out.' : cause.message
+        : 'Unable to load sensor readings.';
+      setError(message);
+      setConnectionMessage('Could not connect to the live readings API.');
     } finally {
-      clearTimeout(timeoutId);
+      window.clearTimeout(timeout);
+      setIsLoading(false);
+      setCountdown(REFRESH_SECONDS);
     }
-  };
+  }, [apiUrl]);
 
-  // Polling loop: Countdown every second, trigger fetch every 5 seconds (Only when isPollingActive is true)
   useEffect(() => {
-    if (!isPollingActive) return;
+    if (!isPolling) return undefined;
+    void fetchLatest();
+    const interval = window.setInterval(() => void fetchLatest(), REFRESH_SECONDS * 1000);
+    return () => window.clearInterval(interval);
+  }, [fetchLatest, isPolling]);
 
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          fetchTelemetry();
-          return 5;
-        }
-        return prev - 1;
-      });
+  useEffect(() => {
+    setCountdown(REFRESH_SECONDS);
+    if (!isPolling) return undefined;
+    const timer = window.setInterval(() => {
+      setCountdown((remaining) => remaining <= 1 ? REFRESH_SECONDS : remaining - 1);
     }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isPolling, apiUrl]);
 
-    return () => clearInterval(timer);
-  }, [isPollingActive, forceMock, renderApiUrl]);
-
-  // Overall AQI composite computation
-  const compositeScore = Math.round(
-    currentReadings.co2 / 20 + currentReadings.co * 8 + currentReadings.no2 * 0.8
-  );
-
-  let aqiCategory = {
-    title: 'EXCELLENT',
-    color: isDarkMode ? 'text-emerald-400' : 'text-black',
-    border: isDarkMode ? 'border-emerald-500/30' : 'border-slate-400',
-    bg: isDarkMode ? 'bg-emerald-500/10' : 'bg-slate-100',
-  };
-
-  if (compositeScore > 110) {
-    aqiCategory = {
-      title: 'UNHEALTHY',
-      color: isDarkMode ? 'text-red-400' : 'text-black',
-      border: isDarkMode ? 'border-red-500/40' : 'border-slate-400',
-      bg: isDarkMode ? 'bg-red-500/10' : 'bg-slate-100',
-    };
-  } else if (compositeScore > 75) {
-    aqiCategory = {
-      title: 'MODERATE',
-      color: isDarkMode ? 'text-amber-400' : 'text-black',
-      border: isDarkMode ? 'border-amber-500/30' : 'border-slate-400',
-      bg: isDarkMode ? 'bg-amber-500/10' : 'bg-slate-100',
-    };
-  } else if (compositeScore > 45) {
-    aqiCategory = {
-      title: 'GOOD',
-      color: isDarkMode ? 'text-emerald-300' : 'text-black',
-      border: isDarkMode ? 'border-emerald-500/30' : 'border-slate-400',
-      bg: isDarkMode ? 'bg-emerald-500/10' : 'bg-slate-100',
-    };
-  }
-
-  const handleTestPing = async () => {
-    setTestPingStatus('Testing connection...');
-    const t0 = performance.now();
+  const saveApiUrl = () => {
+    const nextUrl = draftUrl.trim();
+    if (!nextUrl) {
+      setConnectionMessage('Enter a readings API URL before saving.');
+      return;
+    }
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(renderApiUrl, { method: 'GET', signal: controller.signal });
-      clearTimeout(timeoutId);
-      const latency = Math.round(performance.now() - t0);
-      if (res.ok) {
-        setTestPingStatus(`Success! Status ${res.status} (${latency}ms roundtrip)`);
-      } else {
-        setTestPingStatus(`Server returned status ${res.status} (${latency}ms)`);
-      }
-    } catch (e: any) {
-      setTestPingStatus(`Connection failed: ${e.message} (CORS or server sleeping)`);
+      const parsed = new URL(nextUrl);
+      if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error();
+    } catch {
+      setConnectionMessage('Enter a valid HTTP or HTTPS API URL.');
+      return;
+    }
+    setApiUrl(nextUrl);
+    setIsSettingsOpen(false);
+  };
+
+  const testConnection = async () => {
+    setConnectionMessage('Checking the readings API…');
+    const startedAt = performance.now();
+    try {
+      const response = await fetch(draftUrl.trim(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`Server returned HTTP ${response.status}.`);
+      parseReading(await response.json());
+      setConnectionMessage(`Connected successfully (${Math.round(performance.now() - startedAt)} ms).`);
+    } catch (cause) {
+      setConnectionMessage(cause instanceof Error ? cause.message : 'API connection failed.');
     }
   };
 
-
-
-  // Toggle Start / Stop
-  const handleToggleStartStop = () => {
-    if (isPollingActive) {
-      setIsPollingActive(false);
-    } else {
-      setIsPollingActive(true);
-      setCountdown(5);
-      fetchTelemetry();
-    }
-  };
+  const score = reading
+    ? Math.min(500, Math.max(0, Math.round(reading.co2 / 20 + reading.co * 8 + reading.no2 * 0.8)))
+    : 0;
+  const aqi = getAqi(score);
+  const isDanger = (reading?.co2 ?? 0) >= 1500 || (reading?.co ?? 0) >= 25 || (reading?.no2 ?? 0) >= 100;
 
   return (
-    <div
-      className={`h-screen w-screen flex flex-col overflow-hidden transition-colors duration-300 ${
-        isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-black'
-      }`}
-    >
-      {/* COMPACT TOP NAVIGATION & STATUS BAR */}
-      <header
-        className={`shrink-0 h-13 px-3 sm:px-5 flex items-center justify-between border-b backdrop-blur-md transition-colors ${
-          isDarkMode
-            ? 'bg-slate-950/90 border-emerald-500/20'
-            : 'bg-white border-slate-300 shadow-sm'
-        }`}
-      >
-        {/* Brand & AQI Badge */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-500 glow-emerald shrink-0">
-            <Wind className="w-4 h-4 text-emerald-500" />
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className="text-base font-black tracking-tight font-sans whitespace-nowrap"
-              style={{ color: isDarkMode ? '#34d399' : '#000000' }}
-            >
-              EcoSense AQI
-            </span>
-            <div
-              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-black border ${aqiCategory.bg} ${aqiCategory.color} ${aqiCategory.border}`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>{aqiCategory.title} (AQI {compositeScore})</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Center Channel Status (Clean header without temperature and humidity readings) */}
-        <div className="hidden md:flex items-center gap-2 text-xs font-mono font-bold" style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}>
-          <span className={`w-2 h-2 rounded-full ${isPollingActive ? 'bg-emerald-500 glow-emerald' : 'bg-amber-500'}`} />
-          <span className="font-bold" style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}>
-            {isPollingActive ? '5 Environmental Sensors Active' : 'Dashboard Paused'}
+    <div className={`app-shell ${isDark ? 'theme-dark' : 'theme-light'}`}>
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="AeroWatch dashboard home">
+          <span className="brand-icon"><Wind size={22} /></span>
+          <span className="brand-copy">
+            <strong>AeroWatch</strong>
+            <small>Air Quality Monitoring System</small>
           </span>
-        </div>
+        </a>
 
-        {/* CONTROLS BAR: PROMINENT START / STOP BUTTON & ACTION CONTROLLERS */}
-        <div className="flex items-center gap-2 shrink-0">
-          
-          {/* HIGH-VISIBILITY START / STOP OPTION */}
-          <button
-            onClick={handleToggleStartStop}
-            title={isPollingActive ? 'Click to Stop live dashboard polling' : 'Click to Start live dashboard polling'}
-            className={`px-3 py-1.5 text-xs font-black rounded-lg border flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
-              isPollingActive
-                ? isDarkMode
-                  ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/40'
-                  : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300'
-                : isDarkMode
-                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-400 font-black glow-emerald'
-                  : 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600 font-black shadow-sm'
-            }`}
-          >
-            {isPollingActive ? (
-              <>
-                <Square className="w-3.5 h-3.5 fill-current text-rose-500" />
-                <span className="font-black">Stop Dashboard</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span className="font-black">Start Dashboard</span>
-              </>
-            )}
-          </button>
-
-          {/* Polling Status indicator */}
-          <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border ${
-              isPollingActive
-                ? isDarkMode
-                  ? 'bg-slate-900 border-slate-800'
-                  : 'bg-white border-slate-300 text-black shadow-xs font-bold'
-                : isDarkMode
-                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 font-bold'
-                  : 'bg-amber-50 border-amber-300 text-black font-bold'
-            }`}
-          >
-            <div
-              className={`w-2 h-2 rounded-full ${
-                !isPollingActive
-                  ? 'bg-amber-500'
-                  : syncStatus === 'connected'
-                  ? 'bg-emerald-400 animate-pulse'
-                  : syncStatus === 'mock'
-                  ? 'bg-emerald-500'
-                  : 'bg-amber-500 animate-pulse'
-              }`}
-            />
-            <span
-              className="hidden lg:inline font-sans text-xs font-black"
-              style={{ color: isDarkMode ? (isPollingActive ? '#34d399' : '#f59e0b') : '#000000' }}
-            >
-              {!isPollingActive
-                ? 'STOPPED'
-                : syncStatus === 'connected'
-                ? 'Render Live'
-                : syncStatus === 'mock'
-                ? 'Mock Mode'
-                : 'Fallback'}
-            </span>
-            <span className="font-bold" style={{ color: isDarkMode ? '#cbd5e1' : '#000000' }}>
-              {isPollingActive ? (
-                <>Next: <strong className="font-black tabular-nums" style={{ color: isDarkMode ? '#34d399' : '#000000' }}>{countdown}s</strong></>
-              ) : (
-                <strong className="font-black" style={{ color: isDarkMode ? '#fbbf24' : '#000000' }}>PAUSED</strong>
-              )}
-            </span>
+        <div className="topbar-actions">
+          <div className={`connection-pill ${error ? 'offline' : reading ? 'online' : 'pending'}`}>
+            <span className="connection-dot" />
+            <span>{error ? 'Offline' : reading ? 'Render Live' : 'Connecting'}</span>
           </div>
-
-          {/* Manual Refresh / Poll Now */}
-          <button
-            onClick={() => {
-              setCountdown(5);
-              fetchTelemetry();
-            }}
-            title="Poll now immediately"
-            className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-              isDarkMode
-                ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-emerald-400'
-                : 'bg-white hover:bg-slate-200 border-slate-300 text-black shadow-xs'
-            }`}
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
+          <button className="icon-button" onClick={() => void fetchLatest()} aria-label="Refresh readings" title="Refresh now">
+            <RefreshCw size={18} className={isLoading ? 'spin' : ''} />
           </button>
-
-          {/* API Config Modal Trigger */}
-          <button
-            onClick={() => setIsConfigOpen(true)}
-            title="Configure Render API endpoint"
-            className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-              isDarkMode
-                ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                : 'bg-white hover:bg-slate-200 text-black border-slate-300 shadow-xs'
-            }`}
-          >
-            <Settings className="w-3.5 h-3.5" />
+          <button className="icon-button" onClick={() => setIsDark((value) => !value)} aria-label="Toggle color theme" title="Toggle theme">
+            {isDark ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-
-
-          {/* Dark / Light Mode Toggle */}
-          <button
-            onClick={() => setIsDarkMode(!isDarkMode)}
-            aria-label="Toggle Night/Day Mode"
-            title={isDarkMode ? 'Switch to Bright Mode' : 'Switch to Dark Mode'}
-            className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-              isDarkMode
-                ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-emerald-400'
-                : 'bg-white hover:bg-slate-200 border-slate-300 text-black shadow-xs'
-            }`}
-          >
-            {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          <button className="icon-button" onClick={() => { setDraftUrl(apiUrl); setIsSettingsOpen(true); }} aria-label="Open API settings" title="API settings">
+            <Settings2 size={18} />
           </button>
         </div>
       </header>
 
-      {/* DASHBOARD SINGLE-VIEW CANVAS (ALL 5 READINGS VISIBLE IN ONE SCREEN) */}
-      <main className="flex-1 min-h-0 p-2.5 sm:p-3 lg:p-4 flex flex-col gap-2.5 sm:gap-3 overflow-hidden">
-        
-        {/* ROW 1: THE 3 GAS GAUGES (CO2, CO, NO2) */}
-        <section className="flex-1 min-h-0 flex flex-col">
-          <div className="flex items-center justify-between pb-1 shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 glow-emerald" />
-              {/* Sensor Block Heading: Pure Black font in bright mode */}
-              <h2
-                className="text-xs sm:text-sm font-black uppercase tracking-wider sensor-heading"
-                style={{ color: isDarkMode ? '#ffffff' : '#000000' }}
-              >
-                Gas Concentration Gauges (Real-Time Sensors)
-              </h2>
-            </div>
-            {/* Sensor Block Subheading: Pure Black font in bright mode */}
-            <span
-              className="text-[11px] font-mono hidden sm:inline font-black sensor-subheading"
-              style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}
-            >
-              5s Refresh · Half-Circle Dial Readout
-            </span>
+      <main className="dashboard">
+        <section className="welcome-row">
+          <div>
+            <div className="eyebrow"><span className="eyebrow-line" /> REAL-TIME ENVIRONMENT</div>
+            <h1>Air quality <span>at a glance.</span></h1>
+            <p>Live sensor readings from your AeroWatch monitoring device.</p>
           </div>
-
-          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-3 gap-2.5 sm:gap-3">
-            
-            {/* GAUGE 1: CO2 */}
-            <div
-              className={`rounded-xl p-3 flex flex-col justify-between border transition-all duration-300 relative group overflow-hidden ${
-                getSensorAlertLevel('co2', displayedReadings.co2) === 'danger'
-                  ? isDarkMode
-                    ? 'alert-pulse-danger bg-rose-950/20 border-rose-500/80 shadow-[0_0_25px_rgba(239,68,68,0.35)]'
-                    : 'alert-pulse-danger bg-rose-50/70 border-rose-500 shadow-[0_0_20px_rgba(239,68,68,0.25)]'
-                  : getSensorAlertLevel('co2', displayedReadings.co2) === 'warning'
-                  ? isDarkMode
-                    ? 'alert-pulse-warning bg-amber-950/20 border-amber-500/70 shadow-[0_0_20px_rgba(245,158,11,0.25)]'
-                    : 'alert-pulse-warning bg-amber-50/70 border-amber-500 shadow-[0_0_18px_rgba(245,158,11,0.20)]'
-                  : isDarkMode
-                  ? 'bg-slate-900/90 border-emerald-500/20 hover:border-emerald-500/50 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)]'
-                  : 'bg-white border-slate-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between shrink-0">
-                <div>
-                  {/* Sensor Name Heading: Pure Black font in bright mode */}
-                  <h3
-                    className="font-black text-xs sm:text-sm sensor-name tracking-tight"
-                    style={{ color: isDarkMode ? '#f8fafc' : '#000000' }}
-                  >
-                    CO₂ (Carbon Dioxide)
-                  </h3>
-                  {/* Sensor Subtitle Heading: Pure Black font in bright mode */}
-                  <p
-                    className="text-[10px] font-bold sensor-subheading"
-                    style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}
-                  >
-                    Indoor Ventilation
-                  </p>
-                </div>
-                {/* Visual Alert Badge / Range Badge */}
-                {getSensorAlertLevel('co2', displayedReadings.co2) === 'danger' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-rose-500/25 border-rose-500/60 text-rose-300'
-                        : 'bg-rose-100 border-rose-400 text-rose-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                    <span>⚠️ HAZARD (&gt;1500)</span>
-                  </span>
-                ) : getSensorAlertLevel('co2', displayedReadings.co2) === 'warning' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                        : 'bg-amber-100 border-amber-400 text-amber-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                    <span>⚠️ ALERT (&gt;1000)</span>
-                  </span>
-                ) : (
-                  <span
-                    className="text-[10px] font-mono px-2 py-0.5 rounded font-black border sensor-badge"
-                    style={{
-                      color: isDarkMode ? '#34d399' : '#000000',
-                      backgroundColor: isDarkMode ? 'rgba(16, 185, 129, 0.15)' : '#f1f5f9',
-                      borderColor: isDarkMode ? 'rgba(16, 185, 129, 0.3)' : '#94a3b8',
-                    }}
-                  >
-                    0 - 2000 ppm
-                  </span>
-                )}
-              </div>
-
-              {/* Gauge Canvas Container */}
-              <div className="flex-1 relative min-h-0 w-full flex items-center justify-center my-1">
-                <canvas ref={canvasCO2Ref} className="max-h-full max-w-[220px]" />
-                <div className="absolute inset-0 flex flex-col items-center justify-end pb-0.5 pointer-events-none">
-                  {/* Gauge Value: Pure Black in bright mode with fluid number easing and alert highlight */}
-                  <span
-                    className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight sensor-value ${
-                      getSensorAlertLevel('co2', displayedReadings.co2) === 'danger'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : getSensorAlertLevel('co2', displayedReadings.co2) === 'warning'
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : isDarkMode
-                        ? 'text-white'
-                        : 'text-black'
-                    }`}
-                  >
-                    {displayedReadings.co2}
-                  </span>
-                  <span
-                    className="text-[10px] font-black uppercase tracking-wider"
-                    style={{
-                      color:
-                        getSensorAlertLevel('co2', displayedReadings.co2) === 'danger'
-                          ? '#ef4444'
-                          : getSensorAlertLevel('co2', displayedReadings.co2) === 'warning'
-                          ? '#f59e0b'
-                          : isDarkMode
-                          ? '#34d399'
-                          : '#000000',
-                    }}
-                  >
-                    ppm
-                  </span>
-                </div>
-              </div>
-
-              {/* Gauge Thresholds: Active threshold pill highlights */}
-              <div
-                className={`pt-1.5 border-t flex justify-between items-center text-[10px] font-mono shrink-0 ${
-                  isDarkMode ? 'border-slate-800/80 text-slate-400' : 'border-slate-200 text-black font-bold'
-                }`}
-              >
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co2', displayedReadings.co2) === 'safe'
-                      ? isDarkMode
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black'
-                        : 'bg-emerald-50 text-black border border-emerald-300 font-black'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co2', displayedReadings.co2) === 'safe' ? '#34d399' : '#94a3b8') : '#000000' }}
-                >
-                  &lt;800 (Pure)
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co2', displayedReadings.co2) === 'warning'
-                      ? isDarkMode
-                        ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 font-black animate-pulse'
-                        : 'bg-amber-100 text-black border border-amber-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co2', displayedReadings.co2) === 'warning' ? '#fbbf24' : '#94a3b8') : '#000000' }}
-                >
-                  1000 - 1400
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co2', displayedReadings.co2) === 'danger'
-                      ? isDarkMode
-                        ? 'bg-rose-500/25 text-rose-300 border border-rose-500/50 font-black animate-pulse'
-                        : 'bg-rose-100 text-black border border-rose-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co2', displayedReadings.co2) === 'danger' ? '#f87171' : '#94a3b8') : '#000000' }}
-                >
-                  &gt;1500 (Drowsy)
-                </span>
-              </div>
+          <div className="last-sync">
+            <span className="sync-icon"><RefreshCw size={14} /></span>
+            <div>
+              <span>LAST UPDATED</span>
+              <strong>{formatTime(lastUpdated)}</strong>
             </div>
-
-            {/* GAUGE 2: CO */}
-            <div
-              className={`rounded-xl p-3 flex flex-col justify-between border transition-all duration-300 relative group overflow-hidden ${
-                getSensorAlertLevel('co', displayedReadings.co) === 'danger'
-                  ? isDarkMode
-                    ? 'alert-pulse-danger bg-rose-950/20 border-rose-500/80 shadow-[0_0_25px_rgba(239,68,68,0.35)]'
-                    : 'alert-pulse-danger bg-rose-50/70 border-rose-500 shadow-[0_0_20px_rgba(239,68,68,0.25)]'
-                  : getSensorAlertLevel('co', displayedReadings.co) === 'warning'
-                  ? isDarkMode
-                    ? 'alert-pulse-warning bg-amber-950/20 border-amber-500/70 shadow-[0_0_20px_rgba(245,158,11,0.25)]'
-                    : 'alert-pulse-warning bg-amber-50/70 border-amber-500 shadow-[0_0_18px_rgba(245,158,11,0.20)]'
-                  : isDarkMode
-                  ? 'bg-slate-900/90 border-emerald-500/20 hover:border-emerald-500/50 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)]'
-                  : 'bg-white border-slate-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between shrink-0">
-                <div>
-                  {/* Sensor Name Heading: Pure Black font in bright mode */}
-                  <h3
-                    className="font-black text-xs sm:text-sm sensor-name tracking-tight"
-                    style={{ color: isDarkMode ? '#f8fafc' : '#000000' }}
-                  >
-                    CO (Carbon Monoxide)
-                  </h3>
-                  {/* Sensor Subtitle Heading: Pure Black font in bright mode */}
-                  <p
-                    className="text-[10px] font-bold sensor-subheading"
-                    style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}
-                  >
-                    Combustion Safety
-                  </p>
-                </div>
-                {/* Visual Alert Badge / Range Badge */}
-                {getSensorAlertLevel('co', displayedReadings.co) === 'danger' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-rose-500/25 border-rose-500/60 text-rose-300'
-                        : 'bg-rose-100 border-rose-400 text-rose-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                    <span>⚠️ HAZARD (≥25)</span>
-                  </span>
-                ) : getSensorAlertLevel('co', displayedReadings.co) === 'warning' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                        : 'bg-amber-100 border-amber-400 text-amber-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                    <span>⚠️ ALERT (≥9.0)</span>
-                  </span>
-                ) : (
-                  <span
-                    className="text-[10px] font-mono px-2 py-0.5 rounded font-black border sensor-badge"
-                    style={{
-                      color: isDarkMode ? '#34d399' : '#000000',
-                      backgroundColor: isDarkMode ? 'rgba(16, 185, 129, 0.15)' : '#f1f5f9',
-                      borderColor: isDarkMode ? 'rgba(16, 185, 129, 0.3)' : '#94a3b8',
-                    }}
-                  >
-                    0 - 50 ppm
-                  </span>
-                )}
-              </div>
-
-              {/* Gauge Canvas Container */}
-              <div className="flex-1 relative min-h-0 w-full flex items-center justify-center my-1">
-                <canvas ref={canvasCORef} className="max-h-full max-w-[220px]" />
-                <div className="absolute inset-0 flex flex-col items-center justify-end pb-0.5 pointer-events-none">
-                  {/* Gauge Value: Pure Black in bright mode with fluid number easing and alert highlight */}
-                  <span
-                    className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight sensor-value ${
-                      getSensorAlertLevel('co', displayedReadings.co) === 'danger'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : getSensorAlertLevel('co', displayedReadings.co) === 'warning'
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : isDarkMode
-                        ? 'text-white'
-                        : 'text-black'
-                    }`}
-                  >
-                    {displayedReadings.co}
-                  </span>
-                  <span
-                    className="text-[10px] font-black uppercase tracking-wider"
-                    style={{
-                      color:
-                        getSensorAlertLevel('co', displayedReadings.co) === 'danger'
-                          ? '#ef4444'
-                          : getSensorAlertLevel('co', displayedReadings.co) === 'warning'
-                          ? '#f59e0b'
-                          : isDarkMode
-                          ? '#34d399'
-                          : '#000000',
-                    }}
-                  >
-                    ppm
-                  </span>
-                </div>
-              </div>
-
-              {/* Gauge Thresholds: Active threshold pill highlights */}
-              <div
-                className={`pt-1.5 border-t flex justify-between items-center text-[10px] font-mono shrink-0 ${
-                  isDarkMode ? 'border-slate-800/80 text-slate-400' : 'border-slate-200 text-black font-bold'
-                }`}
-              >
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co', displayedReadings.co) === 'safe'
-                      ? isDarkMode
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black'
-                        : 'bg-emerald-50 text-black border border-emerald-300 font-black'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co', displayedReadings.co) === 'safe' ? '#34d399' : '#94a3b8') : '#000000' }}
-                >
-                  &lt;9.0 (Safe)
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co', displayedReadings.co) === 'warning'
-                      ? isDarkMode
-                        ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 font-black animate-pulse'
-                        : 'bg-amber-100 text-black border border-amber-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co', displayedReadings.co) === 'warning' ? '#fbbf24' : '#94a3b8') : '#000000' }}
-                >
-                  10 - 25
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('co', displayedReadings.co) === 'danger'
-                      ? isDarkMode
-                        ? 'bg-rose-500/25 text-rose-300 border border-rose-500/50 font-black animate-pulse'
-                        : 'bg-rose-100 text-black border border-rose-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('co', displayedReadings.co) === 'danger' ? '#f87171' : '#94a3b8') : '#000000' }}
-                >
-                  &gt;25 (Hazard)
-                </span>
-              </div>
-            </div>
-
-            {/* GAUGE 3: NO2 */}
-            <div
-              className={`rounded-xl p-3 flex flex-col justify-between border transition-all duration-300 relative group overflow-hidden ${
-                getSensorAlertLevel('no2', displayedReadings.no2) === 'danger'
-                  ? isDarkMode
-                    ? 'alert-pulse-danger bg-rose-950/20 border-rose-500/80 shadow-[0_0_25px_rgba(239,68,68,0.35)]'
-                    : 'alert-pulse-danger bg-rose-50/70 border-rose-500 shadow-[0_0_20px_rgba(239,68,68,0.25)]'
-                  : getSensorAlertLevel('no2', displayedReadings.no2) === 'warning'
-                  ? isDarkMode
-                    ? 'alert-pulse-warning bg-amber-950/20 border-amber-500/70 shadow-[0_0_20px_rgba(245,158,11,0.25)]'
-                    : 'alert-pulse-warning bg-amber-50/70 border-amber-500 shadow-[0_0_18px_rgba(245,158,11,0.20)]'
-                  : isDarkMode
-                  ? 'bg-slate-900/90 border-emerald-500/20 hover:border-emerald-500/50 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)]'
-                  : 'bg-white border-slate-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between shrink-0">
-                <div>
-                  {/* Sensor Name Heading: Pure Black font in bright mode */}
-                  <h3
-                    className="font-black text-xs sm:text-sm sensor-name tracking-tight"
-                    style={{ color: isDarkMode ? '#f8fafc' : '#000000' }}
-                  >
-                    NO₂ (Nitrogen Dioxide)
-                  </h3>
-                  {/* Sensor Subtitle Heading: Pure Black font in bright mode */}
-                  <p
-                    className="text-[10px] font-bold sensor-subheading"
-                    style={{ color: isDarkMode ? '#94a3b8' : '#000000' }}
-                  >
-                    Traffic & Emission
-                  </p>
-                </div>
-                {/* Visual Alert Badge / Range Badge */}
-                {getSensorAlertLevel('no2', displayedReadings.no2) === 'danger' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-rose-500/25 border-rose-500/60 text-rose-300'
-                        : 'bg-rose-100 border-rose-400 text-rose-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                    <span>⚠️ HAZARD (&gt;100)</span>
-                  </span>
-                ) : getSensorAlertLevel('no2', displayedReadings.no2) === 'warning' ? (
-                  <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-black border flex items-center gap-1.5 animate-pulse ${
-                      isDarkMode
-                        ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                        : 'bg-amber-100 border-amber-400 text-amber-950'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                    <span>⚠️ ALERT (≥54)</span>
-                  </span>
-                ) : (
-                  <span
-                    className="text-[10px] font-mono px-2 py-0.5 rounded font-black border sensor-badge"
-                    style={{
-                      color: isDarkMode ? '#34d399' : '#000000',
-                      backgroundColor: isDarkMode ? 'rgba(16, 185, 129, 0.15)' : '#f1f5f9',
-                      borderColor: isDarkMode ? 'rgba(16, 185, 129, 0.3)' : '#94a3b8',
-                    }}
-                  >
-                    0 - 150 ppb
-                  </span>
-                )}
-              </div>
-
-              {/* Gauge Canvas Container */}
-              <div className="flex-1 relative min-h-0 w-full flex items-center justify-center my-1">
-                <canvas ref={canvasNO2Ref} className="max-h-full max-w-[220px]" />
-                <div className="absolute inset-0 flex flex-col items-center justify-end pb-0.5 pointer-events-none">
-                  {/* Gauge Value: Pure Black in bright mode with fluid number easing and alert highlight */}
-                  <span
-                    className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight sensor-value ${
-                      getSensorAlertLevel('no2', displayedReadings.no2) === 'danger'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : getSensorAlertLevel('no2', displayedReadings.no2) === 'warning'
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : isDarkMode
-                        ? 'text-white'
-                        : 'text-black'
-                    }`}
-                  >
-                    {displayedReadings.no2}
-                  </span>
-                  <span
-                    className="text-[10px] font-black uppercase tracking-wider"
-                    style={{
-                      color:
-                        getSensorAlertLevel('no2', displayedReadings.no2) === 'danger'
-                          ? '#ef4444'
-                          : getSensorAlertLevel('no2', displayedReadings.no2) === 'warning'
-                          ? '#f59e0b'
-                          : isDarkMode
-                          ? '#34d399'
-                          : '#000000',
-                    }}
-                  >
-                    ppb
-                  </span>
-                </div>
-              </div>
-
-              {/* Gauge Thresholds: Active threshold pill highlights */}
-              <div
-                className={`pt-1.5 border-t flex justify-between items-center text-[10px] font-mono shrink-0 ${
-                  isDarkMode ? 'border-slate-800/80 text-slate-400' : 'border-slate-200 text-black font-bold'
-                }`}
-              >
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('no2', displayedReadings.no2) === 'safe'
-                      ? isDarkMode
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black'
-                        : 'bg-emerald-50 text-black border border-emerald-300 font-black'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('no2', displayedReadings.no2) === 'safe' ? '#34d399' : '#94a3b8') : '#000000' }}
-                >
-                  &lt;53 (Good)
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('no2', displayedReadings.no2) === 'warning'
-                      ? isDarkMode
-                        ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 font-black animate-pulse'
-                        : 'bg-amber-100 text-black border border-amber-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('no2', displayedReadings.no2) === 'warning' ? '#fbbf24' : '#94a3b8') : '#000000' }}
-                >
-                  54 - 100
-                </span>
-                <span
-                  className={`font-bold sensor-threshold transition-all px-1.5 py-0.5 rounded ${
-                    getSensorAlertLevel('no2', displayedReadings.no2) === 'danger'
-                      ? isDarkMode
-                        ? 'bg-rose-500/25 text-rose-300 border border-rose-500/50 font-black animate-pulse'
-                        : 'bg-rose-100 text-black border border-rose-400 font-black animate-pulse'
-                      : 'opacity-65'
-                  }`}
-                  style={{ color: isDarkMode ? (getSensorAlertLevel('no2', displayedReadings.no2) === 'danger' ? '#f87171' : '#94a3b8') : '#000000' }}
-                >
-                  &gt;100 (High)
-                </span>
-              </div>
-            </div>
-
+            <span className="sync-divider" />
+            <span className="refresh-count">{isPolling ? `Refresh in ${countdown}s` : 'Auto-refresh paused'}</span>
+            <button className="pause-button" onClick={() => setIsPolling((value) => !value)} aria-label={isPolling ? 'Pause auto refresh' : 'Resume auto refresh'}>
+              {isPolling ? <Pause size={15} /> : <Play size={15} />}
+            </button>
           </div>
         </section>
 
-        {/* ROW 2: THE 2 LINE GRAPHS (TEMPERATURE & HUMIDITY) SIDE-BY-SIDE */}
-        <section className="flex-1 min-h-0 flex flex-col">
-          <div className="flex items-center justify-between pb-1 shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 glow-emerald" />
-              {/* Sensor Block Heading: Pure Black font in bright mode */}
-              <h2
-                className="text-xs sm:text-sm font-black uppercase tracking-wider sensor-heading"
-                style={{ color: isDarkMode ? '#ffffff' : '#000000' }}
-              >
-                Environmental Trend Graphs (20-Point Buffer)
-              </h2>
-            </div>
-            {/* Sensor Block Subheading: Pure Black font in bright mode */}
-            <span
-              className="text-[11px] font-mono font-black hidden sm:inline sensor-subheading"
-              style={{ color: isDarkMode ? '#34d399' : '#000000' }}
-            >
-              Bright Green Semi-Transparent Gradient Fill
-            </span>
+        {error && (
+          <div className="error-banner" role="status">
+            <CircleAlert size={18} />
+            <div><strong>Live readings are unavailable</strong><span>{error}</span></div>
+            <button onClick={() => void fetchLatest()}>Try again</button>
           </div>
+        )}
 
-          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-2.5 sm:gap-3">
-            
-            {/* LINE GRAPH 1: Temperature */}
-            <div
-              className={`rounded-xl p-3 flex flex-col border transition-all duration-300 overflow-hidden ${
-                isDarkMode
-                  ? 'bg-slate-900/90 border-emerald-500/20 hover:border-emerald-500/50 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)]'
-                  : 'bg-white border-slate-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1 shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 glow-emerald" />
-                  {/* Sensor Name Heading: Pure Black font in bright mode */}
-                  <span
-                    className="font-black text-xs sm:text-sm sensor-name tracking-tight"
-                    style={{ color: isDarkMode ? '#f8fafc' : '#000000' }}
-                  >
-                    Temperature (°C)
-                  </span>
-                </div>
-                {/* Live Sensor Badge: Pure Black in bright mode */}
-                <div
-                  className="text-xs font-mono font-black border sensor-badge px-2 py-0.5 rounded"
-                  style={{
-                    color: isDarkMode ? '#34d399' : '#000000',
-                    backgroundColor: isDarkMode ? 'rgba(16, 185, 129, 0.15)' : '#f1f5f9',
-                    borderColor: isDarkMode ? 'rgba(16, 185, 129, 0.3)' : '#94a3b8',
-                  }}
-                >
-                  Live: <strong className="tabular-nums font-black" style={{ color: isDarkMode ? '#34d399' : '#000000' }}>{Number(currentReadings.temperature).toFixed(2)}</strong> °C
-                </div>
-              </div>
+        {connectionMessage && !isSettingsOpen && (
+          <div className="inline-message" role="status">{connectionMessage}</div>
+        )}
 
-              {/* Chart Canvas */}
-              <div className="flex-1 relative w-full min-h-0">
-                <canvas ref={canvasTempRef} />
-              </div>
+        <section className="overview-grid">
+          <article className={`panel aqi-panel aqi-${aqi.color}`}>
+            <div className="aqi-panel-top">
+              <div className="device-chip"><CloudCog size={15} /><span>{reading?.deviceId ?? 'AeroWatch Sensor'}</span></div>
+              <span className="monitor-chip"><span /> LIVE MONITOR</span>
             </div>
-
-            {/* LINE GRAPH 2: Humidity */}
-            <div
-              className={`rounded-xl p-3 flex flex-col border transition-all duration-300 overflow-hidden ${
-                isDarkMode
-                  ? 'bg-slate-900/90 border-emerald-500/20 hover:border-emerald-500/50 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)]'
-                  : 'bg-white border-slate-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1 shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 glow-emerald" />
-                  {/* Sensor Name Heading: Pure Black font in bright mode */}
-                  <span
-                    className="font-black text-xs sm:text-sm sensor-name tracking-tight"
-                    style={{ color: isDarkMode ? '#f8fafc' : '#000000' }}
-                  >
-                    Relative Humidity (%)
-                  </span>
-                </div>
-                {/* Live Sensor Badge: Pure Black in bright mode */}
-                <div
-                  className="text-xs font-mono font-black border sensor-badge px-2 py-0.5 rounded"
-                  style={{
-                    color: isDarkMode ? '#34d399' : '#000000',
-                    backgroundColor: isDarkMode ? 'rgba(16, 185, 129, 0.15)' : '#f1f5f9',
-                    borderColor: isDarkMode ? 'rgba(16, 185, 129, 0.3)' : '#94a3b8',
-                  }}
-                >
-                  Live: <strong className="tabular-nums font-black" style={{ color: isDarkMode ? '#34d399' : '#000000' }}>{Number(currentReadings.humidity).toFixed(2)}</strong> %
+            <div className="aqi-content">
+              <div className="gauge-wrap" aria-label={`Air quality index ${score}`}>
+                <svg className="aqi-gauge" viewBox="0 0 240 150" role="img" aria-hidden="true">
+                  <path className="gauge-track" d="M 25 125 A 95 95 0 0 1 215 125" />
+                  <path className="gauge-progress" d="M 25 125 A 95 95 0 0 1 215 125" pathLength="100" style={{ strokeDasharray: `${Math.min(score / 300, 1) * 100} 100` }} />
+                </svg>
+                <div className="gauge-value">
+                  {reading ? <strong>{score}</strong> : <LoaderCircle size={32} className="spin" />}
+                  <span>AIR QUALITY INDEX</span>
                 </div>
               </div>
-
-              {/* Chart Canvas */}
-              <div className="flex-1 relative w-full min-h-0">
-                <canvas ref={canvasHumidityRef} />
+              <div className={`aqi-status status-${aqi.color}`}>
+                <ShieldCheck size={17} />
+                <span>{aqi.label}</span>
               </div>
+              <p className="aqi-advice">
+                {reading ? getHealthAdvice(score) : 'Waiting for the first live sensor reading.'}
+              </p>
             </div>
+            <div className="aqi-footer">
+              <span><Activity size={14} /> Composite sensor index</span>
+              <span>Scale 0–500</span>
+            </div>
+          </article>
 
+          <div className="environment-column">
+            <article className="panel environment-card temperature-card">
+              <div className="environment-top">
+                <span className="environment-icon temp-icon"><Thermometer size={20} /></span>
+                <span className="comfort-tag">{reading ? reading.temperature > 26 ? 'Warm' : reading.temperature < 18 ? 'Cool' : 'Comfortable' : 'Waiting'}</span>
+              </div>
+              <span className="environment-label">Temperature</span>
+              <div className="environment-reading">{reading ? reading.temperature.toFixed(1) : '--'}<small>°C</small></div>
+              <div className="environment-foot"><span>Ambient temperature</span><Sun size={15} /></div>
+            </article>
+
+            <article className="panel environment-card humidity-card">
+              <div className="environment-top">
+                <span className="environment-icon humidity-icon"><Droplets size={20} /></span>
+                <span className="comfort-tag">{reading ? reading.humidity > 60 ? 'Humid' : reading.humidity < 30 ? 'Dry' : 'Optimal' : 'Waiting'}</span>
+              </div>
+              <span className="environment-label">Humidity</span>
+              <div className="environment-reading">{reading ? reading.humidity.toFixed(1) : '--'}<small>%</small></div>
+              <div className="environment-foot"><span>Relative humidity</span><Droplets size={15} /></div>
+            </article>
+
+            <article className={`panel live-source ${error ? 'source-error' : ''}`}>
+              <div className="source-icon"><Cloud size={18} /></div>
+              <div className="source-copy">
+                <strong>{error ? 'API connection issue' : 'Live Render data'}</strong>
+                <span>{error ? 'Check your connection or endpoint' : 'Synced from your sensor backend'}</span>
+              </div>
+              <span className="source-indicator"><span /></span>
+            </article>
           </div>
         </section>
 
+        <section className="sensor-section">
+          <div className="section-heading">
+            <div className="section-title">
+              <span className="section-icon"><AirVent size={17} /></span>
+              <div><h2>Gas sensor telemetry</h2><p>Live pollutant concentrations</p></div>
+            </div>
+            <span className="device-label"><span className="device-dot" /> DEVICE <strong>{reading?.deviceId ?? '—'}</strong></span>
+          </div>
+          <div className="sensor-grid">
+            {[
+              { key: 'co2' as const, title: 'Carbon dioxide', symbol: 'CO₂', unit: 'ppm', icon: Cloud, warning: 1000, danger: 1500, max: 2000, color: 'violet' },
+              { key: 'co' as const, title: 'Carbon monoxide', symbol: 'CO', unit: 'ppm', icon: ShieldCheck, warning: 9, danger: 25, max: 50, color: 'orange' },
+              { key: 'no2' as const, title: 'Nitrogen dioxide', symbol: 'NO₂', unit: 'ppb', icon: FlaskConical, warning: 54, danger: 100, max: 150, color: 'cyan' },
+            ].map((sensor) => {
+              const value = reading?.[sensor.key] ?? 0;
+              const alert = getAlert(value, sensor.warning, sensor.danger);
+              const Icon = sensor.icon;
+              return (
+                <article key={sensor.key} className={`panel sensor-card metric-${sensor.color} ${alert.tone === 'red' ? 'sensor-danger' : ''}`}>
+                  <div className="sensor-card-top">
+                    <div className="sensor-name">
+                      <span className="sensor-icon"><Icon size={18} /></span>
+                      <div><strong>{sensor.symbol}</strong><span>{sensor.title}</span></div>
+                    </div>
+                    <span className={`alert-badge badge-${alert.tone}`}><span />{alert.label}</span>
+                  </div>
+                  <div className="sensor-value">
+                    <strong>{reading ? sensor.key === 'co2' ? Math.round(value) : value.toFixed(1) : '--'}</strong>
+                    <span>{sensor.unit}</span>
+                  </div>
+                  <div className="meter-track"><span style={{ width: `${Math.min((value / sensor.max) * 100, 100)}%` }} /></div>
+                  <div className="sensor-range"><span>0–{sensor.max} {sensor.unit}</span><span>{sensor.warning}+ warning</span></div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="trends-section">
+          <div className="section-heading">
+            <div className="section-title">
+              <span className="section-icon"><Activity size={17} /></span>
+              <div><h2>Environmental trends</h2><p>Built from live API polls · last {MAX_TREND_POINTS} readings</p></div>
+            </div>
+            <span className="live-label"><span /> UPDATING EVERY 5 SECONDS</span>
+          </div>
+          <div className="trend-grid">
+            <TrendChart points={trend} metric="temperature" color="orange" unit="°C" value={reading?.temperature ?? 0} />
+            <TrendChart points={trend} metric="humidity" color="cyan" unit="%" value={reading?.humidity ?? 0} />
+            <TrendChart points={trend} metric="co2" color="violet" unit="ppm" value={reading?.co2 ?? 0} />
+          </div>
+        </section>
+
+        <footer className="dashboard-footer">
+          <div><Leaf size={15} /><span>AeroWatch <b>·</b> Environmental intelligence</span></div>
+          <span>Readings API <code>{apiUrl}</code></span>
+          <button onClick={() => { setDraftUrl(apiUrl); setIsSettingsOpen(true); }}>API settings <ChevronDown size={14} /></button>
+        </footer>
       </main>
 
-      {/* RENDER API CONFIG MODAL */}
-      {isConfigOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div
-            className={`border rounded-2xl p-5 max-w-lg w-full shadow-2xl space-y-3.5 ${
-              isDarkMode ? 'bg-slate-900 border-emerald-500/30' : 'bg-white border-slate-300 text-black'
-            }`}
-          >
-            <div className={`flex items-center justify-between pb-2 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-              <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-emerald-500" />
-                <h3 className="font-black text-sm text-black dark:text-emerald-400">
-                  Render REST API Endpoint Settings
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsConfigOpen(false)}
-                className="text-slate-400 hover:text-black dark:hover:text-white p-1 cursor-pointer"
-              >
-                ✕
-              </button>
+      {isSettingsOpen && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsSettingsOpen(false); }}>
+          <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div className="modal-heading">
+              <div className="modal-title-icon"><Settings2 size={19} /></div>
+              <div><h2 id="settings-title">API connection</h2><p>Choose the live readings endpoint for this dashboard.</p></div>
+              <button className="icon-button" onClick={() => setIsSettingsOpen(false)} aria-label="Close settings"><X size={18} /></button>
             </div>
-
-            <p className="text-xs dark:text-slate-300 text-black font-bold leading-relaxed">
-              Connect to your live backend deployed on Render (connected to MongoDB Atlas).
-            </p>
-
-            <div>
-              <label className="block text-xs font-black dark:text-slate-300 text-black mb-1">
-                Render Endpoint URL
-              </label>
-              <input
-                type="url"
-                value={renderApiUrl}
-                onChange={(e) => setRenderApiUrl(e.target.value)}
-                placeholder="https://your-api.onrender.com/api/sensor-data"
-                className={`w-full font-mono text-xs px-3 py-2 rounded-lg border focus:outline-none focus:border-emerald-500 font-bold ${
-                  isDarkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-300 text-black'
-                }`}
-              />
+            <label className="input-label" htmlFor="api-url">Readings API URL</label>
+            <input
+              id="api-url"
+              className="api-input"
+              type="url"
+              value={draftUrl}
+              onChange={(event) => setDraftUrl(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') saveApiUrl(); }}
+              placeholder={DEFAULT_API_URL}
+            />
+            <div className="endpoint-hint"><ExternalLink size={14} /><span>Use the full endpoint ending in <code>/api/readings/latest</code>.</span></div>
+            {connectionMessage && <div className="connection-message" role="status">{connectionMessage}</div>}
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => { setDraftUrl(DEFAULT_API_URL); setConnectionMessage(undefined); }}>Reset to Render API</button>
+              <button className="secondary-button" onClick={() => void testConnection()}>Test connection</button>
+              <button className="primary-button" onClick={saveApiUrl}><Check size={16} /> Save & refresh</button>
             </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <label className="flex items-center gap-2 text-xs dark:text-slate-300 text-black font-bold cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={forceMock}
-                  onChange={(e) => setForceMock(e.target.checked)}
-                  className="rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-emerald-400"
-                />
-                <span className="text-black dark:text-slate-300 font-black">Force Mock Generator Mode</span>
-              </label>
-
-              <button
-                onClick={handleTestPing}
-                type="button"
-                className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 dark:border-emerald-500/30 bg-slate-100 dark:bg-emerald-500/10 hover:bg-slate-200 text-black dark:text-emerald-400 font-mono font-bold cursor-pointer"
-              >
-                Test Ping
-              </button>
-            </div>
-
-            {testPingStatus && (
-              <div className={`p-2 rounded-lg border text-xs font-mono font-bold ${
-                isDarkMode ? 'bg-slate-950/80 border-slate-800 text-emerald-400' : 'bg-slate-50 border-slate-300 text-black'
-              }`}>
-                {testPingStatus}
-              </div>
-            )}
-
-            {/* Visual Alert Testing Controls */}
-            <div className={`p-2.5 rounded-lg border flex flex-col gap-2 ${
-              isDarkMode ? 'bg-slate-950/80 border-slate-800' : 'bg-slate-50 border-slate-300'
-            }`}>
-              <div className="text-xs font-black text-black dark:text-emerald-400 flex items-center justify-between">
-                <span>Simulate Sensor Alert Levels:</span>
-                <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">Shake & Pulse Test</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    ingestReading({
-                      temperature: 25.4,
-                      humidity: 49.0,
-                      co2: 1650,
-                      co: 28.5,
-                      no2: 112.0,
-                      timestamp: new Date().toISOString(),
-                    });
-                    setIsConfigOpen(false);
-                  }}
-                  className="px-2.5 py-1.5 text-xs rounded-lg bg-rose-500 hover:bg-rose-600 text-white font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <span>🚨 Hazard Spike</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    ingestReading({
-                      temperature: 24.2,
-                      humidity: 48.5,
-                      co2: 1150,
-                      co: 12.0,
-                      no2: 68.0,
-                      timestamp: new Date().toISOString(),
-                    });
-                    setIsConfigOpen(false);
-                  }}
-                  className="px-2.5 py-1.5 text-xs rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <span>⚠️ Warning Spike</span>
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  ingestReading({
-                    temperature: 23.8,
-                    humidity: 46.2,
-                    co2: 560,
-                    co: 1.6,
-                    no2: 21.0,
-                    timestamp: new Date().toISOString(),
-                  });
-                  setIsConfigOpen(false);
-                }}
-                className="w-full py-1 text-xs rounded-lg border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-bold transition-all cursor-pointer"
-              >
-                ✓ Reset to Safe Normal Readings
-              </button>
-            </div>
-
-            <div className={`p-2.5 rounded-lg border font-mono text-[11px] ${
-              isDarkMode ? 'bg-slate-950/80 border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-300 text-black'
-            }`}>
-              <div className="text-black dark:text-emerald-400 font-black mb-1">
-                Expected Backend JSON Response:
-              </div>
-              <pre className="dark:text-slate-300 text-black font-bold overflow-x-auto">{`{
-  "temperature": 24.2,
-  "humidity": 48.5,
-  "co2": 560,
-  "co": 1.6,
-  "no2": 19.8,
-  "timestamp": "${new Date().toISOString()}"
-}`}</pre>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                onClick={() => setIsConfigOpen(false)}
-                className={`px-3.5 py-1.5 text-xs rounded-lg font-bold cursor-pointer ${
-                  isDarkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-200 hover:bg-slate-300 text-black'
-                }`}
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  setIsConfigOpen(false);
-                  setCountdown(5);
-                  fetchTelemetry();
-                }}
-                className="px-3.5 py-1.5 text-xs rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black transition-colors cursor-pointer"
-              >
-                Apply & Refresh
-              </button>
-            </div>
-          </div>
+          </section>
         </div>
       )}
-
     </div>
   );
 }

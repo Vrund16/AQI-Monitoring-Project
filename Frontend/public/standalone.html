@@ -411,10 +411,10 @@
 
   <script>
     // =========================================================================
-    // 🚀 RENDER API CONFIGURATION - REPLACE WITH YOUR ENDPOINT
+    // Render API configuration
     // =========================================================================
-    let RENDER_API_ENDPOINT = "https://my-aqi-api.onrender.com/api/sensor-data";
-    let FORCE_MOCK_MODE = true; // Set to false to fetch from Render live
+    let RENDER_API_ENDPOINT = "https://aqi-monitoring-project.onrender.com/api/readings/latest";
+    let FORCE_MOCK_MODE = false;
     const MAX_DATA_POINTS = 20;
 
     // Theme state: Defaults to Bright Mode (false) as requested
@@ -840,15 +840,20 @@
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
+        const reading = payload?.data ?? payload;
         
         const cleanData = {
-          temperature: +(payload.temperature ?? payload.temp ?? 24.0),
-          humidity: +(payload.humidity ?? payload.hum ?? 50.0),
-          co2: +(payload.co2 ?? payload.carbon_dioxide ?? 550),
-          co: +(payload.co ?? payload.carbon_monoxide ?? 1.5),
-          no2: +(payload.no2 ?? payload.nitrogen_dioxide ?? 20.0),
-          timestamp: payload.timestamp || new Date().toISOString()
+          temperature: Number(reading.temperature ?? reading.temp),
+          humidity: Number(reading.humidity ?? reading.hum),
+          co2: Number(reading.co2 ?? reading.carbon_dioxide),
+          co: Number(reading.co ?? reading.carbon_monoxide),
+          no2: Number(reading.no2 ?? reading.nitrogen_dioxide),
+          timestamp: reading.createdAt ?? reading.timestamp ?? new Date().toISOString()
         };
+
+        if (![cleanData.temperature, cleanData.humidity, cleanData.co2, cleanData.co, cleanData.no2].every(Number.isFinite)) {
+          throw new Error('API returned invalid sensor readings');
+        }
 
         sourceLabel.textContent = 'Render Live';
         sourceLabel.className = isDarkTheme ? 'hidden lg:inline font-black text-emerald-400' : 'hidden lg:inline font-black text-black';

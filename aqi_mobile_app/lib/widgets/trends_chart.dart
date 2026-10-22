@@ -15,7 +15,7 @@ class TrendsChart extends StatefulWidget {
 }
 
 class _TrendsChartState extends State<TrendsChart> {
-  ChartMetric _selectedMetric = ChartMetric.aqi;
+  ChartMetric _selectedMetric = ChartMetric.temperature;
 
   @override
   Widget build(BuildContext context) {
@@ -142,7 +142,8 @@ class _TrendsChartState extends State<TrendsChart> {
                         : const Color(0xFFF1F5F9),
                     labelStyle: TextStyle(
                       fontSize: 11,
-                      fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                      fontWeight:
+                          isSelected ? FontWeight.w800 : FontWeight.w600,
                       color: isSelected
                           ? cfg.color
                           : (isDark ? Colors.white70 : const Color(0xFF475569)),
@@ -181,8 +182,10 @@ class _TrendsChartState extends State<TrendsChart> {
                   ),
                 ),
                 titlesData: FlTitlesData(
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
@@ -199,7 +202,9 @@ class _TrendsChartState extends State<TrendsChart> {
                               style: TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.w600,
-                                color: isDark ? Colors.white38 : const Color(0xFF94A3B8),
+                                color: isDark
+                                    ? Colors.white38
+                                    : const Color(0xFF94A3B8),
                               ),
                             ),
                           );
@@ -214,11 +219,15 @@ class _TrendsChartState extends State<TrendsChart> {
                       reservedSize: 38,
                       getTitlesWidget: (val, meta) {
                         return Text(
-                          val >= 1000 ? '${(val / 1000).toStringAsFixed(1)}k' : val.toInt().toString(),
+                          val >= 1000
+                              ? '${(val / 1000).toStringAsFixed(1)}k'
+                              : val.toInt().toString(),
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
-                            color: isDark ? Colors.white38 : const Color(0xFF94A3B8),
+                            color: isDark
+                                ? Colors.white38
+                                : const Color(0xFF94A3B8),
                           ),
                         );
                       },
@@ -241,7 +250,8 @@ class _TrendsChartState extends State<TrendsChart> {
                           radius: 3,
                           color: metricConfig.color,
                           strokeWidth: 1.5,
-                          strokeColor: isDark ? const Color(0xFF131B2E) : Colors.white,
+                          strokeColor:
+                              isDark ? const Color(0xFF131B2E) : Colors.white,
                         );
                       },
                     ),
@@ -266,7 +276,8 @@ class _TrendsChartState extends State<TrendsChart> {
                       return touchedSpots.map((spot) {
                         final idx = spot.spotIndex;
                         final reading = widget.history[idx];
-                        final timeStr = DateFormat('hh:mm:ss a').format(reading.timestamp);
+                        final timeStr =
+                            DateFormat('hh:mm:ss a').format(reading.timestamp);
                         return LineTooltipItem(
                           '${spot.y.toStringAsFixed(1)} ${metricConfig.unit}\n',
                           TextStyle(
@@ -302,9 +313,11 @@ class _TrendsChartState extends State<TrendsChart> {
       case ChartMetric.aqi:
         return _MetricConfig('AQI Index', 'Index', const Color(0xFF10B981));
       case ChartMetric.co2:
-        return _MetricConfig('CO₂ (Carbon Dioxide)', 'ppm', const Color(0xFF06B6D4));
+        return _MetricConfig(
+            'CO₂ (Carbon Dioxide)', 'ppm', const Color(0xFF06B6D4));
       case ChartMetric.no2:
-        return _MetricConfig('NO₂ (Nitrogen Dioxide)', 'ppb', const Color(0xFF8B5CF6));
+        return _MetricConfig(
+            'NO₂ (Nitrogen Dioxide)', 'ppb', const Color(0xFF8B5CF6));
       case ChartMetric.temperature:
         return _MetricConfig('Temperature', '°C', const Color(0xFFF97316));
       case ChartMetric.humidity:

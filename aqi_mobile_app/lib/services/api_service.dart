@@ -1,194 +1,154 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+
 import 'package:http/http.dart' as http;
+
 import '../models/sensor_reading.dart';
 
 class ApiService {
-  static const String defaultBaseUrl = 'https://aqi-monitoring-project.onrender.com';
+  static const String defaultApiUrl =
+      'https://aqi-monitoring-project.onrender.com/api/readings/latest';
 
   final http.Client _client;
 
   ApiService({http.Client? client}) : _client = client ?? http.Client();
 
-  /// Clean URL helper
-  static String formatUrl(String raw) {
-    String url = raw.trim();
-    if (url.isEmpty) return defaultBaseUrl;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://$url';
+  static String formatLatestEndpoint(String raw) {
+    var value = raw.trim();
+    if (value.isEmpty) return defaultApiUrl;
+    if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(value)) {
+      value = 'https://$value';
     }
-    if (url.endsWith('/')) {
-      url = url.substring(0, url.length - 1);
+
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasAuthority || uri.host.isEmpty) {
+      throw const FormatException('Enter a valid HTTP or HTTPS API URL.');
     }
-    return url;
+    if (uri.scheme != 'http' && uri.scheme != 'https') {
+      throw const FormatException('API URL must use HTTP or HTTPS.');
+    }
+
+    var path = uri.path.replaceFirst(RegExp(r'/+$'), '');
+    if (path.endsWith('/api/readings')) {
+      path = '$path/latest';
+    } else if (!path.endsWith('/api/readings/latest')) {
+      path = '$path/api/readings/latest';
+    }
+
+    return Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: path,
+    ).toString();
   }
 
-  /// Fetch the latest real-time sensor reading from the Render backend
-  Future<SensorReading> fetchLatestReading({String baseUrl = defaultBaseUrl}) async {
-    final cleanUrl = formatUrl(baseUrl);
-    final uri = Uri.parse('$cleanUrl/api/readings/latest');
+  static Uri _latestUri(String endpoint) =>
+      Uri.parse(formatLatestEndpoint(endpoint));
 
+  static Uri _backendUri(String endpoint, String path) {
+    final uri = _latestUri(endpoint);
+    return Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: path,
+    );
+  }
+
+  Future<SensorReading> fetchLatestReading({
+    String endpoint = defaultApiUrl,
+  }) async {
+    final uri = _latestUri(endpoint);
     try {
       final response = await _client.get(
         uri,
         headers: {'Accept': 'application/json'},
       ).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final data = decoded['data'] ?? decoded;
-        if (data is Map<String, dynamic>) {
-          return SensorReading.fromJson(data);
-        }
-        throw Exception('Unexpected data payload structure from API');
-      } else if (response.statusCode == 404) {
-        throw Exception('No sensor readings in database yet');
-      } else {
-        throw Exception('Server returned HTTP ${response.statusCode}');
+      if (response.statusCode == 404) {
+        throw Exception('No sensor readings in the database yet.');
       }
-    } on SocketException catch (_) {
+      if (response.statusCode != 200) {
+        throw Exception('Server returned HTTP ${response.statusCode}.');
+      }
+
+      final decoded = jsonDecode(response.body);
+      final data =
+          decoded is Map<String, dynamic> ? decoded['data'] ?? decoded : null;
+      if (data is! Map<String, dynamic>) {
+        throw Exception('The API returned an invalid readings response.');
+      }
+      return SensorReading.fromJson(data);
+    } on SocketException {
       throw Exception(
-        'Cannot reach $cleanUrl. Check phone Wi-Fi/Internet connection, or Render instance may be spinning up.',
+        'Cannot reach ${uri.host}. Check the phone internet connection or wait for the Render service to start.',
       );
-    } on TimeoutException catch (_) {
-      throw Exception(
-        'Request timed out. Render free tier takes ~30-40s during cold start.',
-      );
-    } catch (e) {
-      if (e.toString().contains('Failed host lookup')) {
+    } on TimeoutException {
+      throw Exception('The readings API request timed out.');
+    } on FormatException catch (error) {
+      throw Exception('The API returned invalid JSON: ${error.message}');
+    } catch (error) {
+      if (error.toString().contains('Failed host lookup')) {
         throw Exception(
-          'DNS Lookup failed for $cleanUrl. Please verify your phone has an active Internet connection.',
+          'DNS lookup failed for ${uri.host}. Check that the phone has internet access.',
         );
       }
       rethrow;
     }
   }
 
-  /// Fetch historical readings from Render backend
   Future<List<SensorReading>> fetchHistory({
     int limit = 20,
-    String baseUrl = defaultBaseUrl,
+    String endpoint = defaultApiUrl,
   }) async {
-    final cleanUrl = formatUrl(baseUrl);
-    final uri = Uri.parse('$cleanUrl/api/readings?limit=$limit');
-
-    try {
-      final response = await _client.get(
-        uri,
-        headers: {'Accept': 'application/json'},
-      ).timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final list = decoded['data'];
-        if (list is List) {
-          return list
-              .map((item) => SensorReading.fromJson(item as Map<String, dynamic>))
-              .toList();
-        }
-        return [];
-      } else {
-        throw Exception('Failed to load history: HTTP ${response.statusCode}');
-      }
-    } catch (_) {
-      // Return empty list on network error without crashing
-      return [];
-    }
-  }
-
-  /// Health check for the server & MongoDB status
-  Future<Map<String, dynamic>> checkHealth({String baseUrl = defaultBaseUrl}) async {
-    final cleanUrl = formatUrl(baseUrl);
-    final uri = Uri.parse('$cleanUrl/api/health');
-
-    try {
-      final response = await _client.get(uri).timeout(const Duration(seconds: 12));
-      if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>;
-      } else {
-        return {
-          'status': 'error',
-          'server': 'offline',
-          'code': response.statusCode,
-        };
-      }
-    } on SocketException catch (e) {
-      return {
-        'status': 'error',
-        'message': 'No internet or hostname not found: ${e.message}',
-      };
-    } on TimeoutException {
-      return {
-        'status': 'error',
-        'message': 'Server timed out (Render free tier waking up)',
-      };
-    } catch (e) {
-      return {
-        'status': 'error',
-        'message': e.toString().replaceFirst('Exception: ', ''),
-      };
-    }
-  }
-
-  /// Post a new test reading to the backend
-  Future<bool> postReading({
-    required String deviceId,
-    required double co2,
-    required double co,
-    required double no2,
-    required double temperature,
-    required double humidity,
-    String baseUrl = defaultBaseUrl,
-  }) async {
-    final cleanUrl = formatUrl(baseUrl);
-    final uri = Uri.parse('$cleanUrl/api/readings');
-
-    final response = await _client.post(
+    final uri = _backendUri(endpoint, '/api/readings')
+        .replace(queryParameters: {'limit': '$limit'});
+    final response = await _client.get(
       uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'deviceId': deviceId,
-        'co2': co2,
-        'co': co,
-        'no2': no2,
-        'temperature': temperature,
-        'humidity': humidity,
-      }),
-    ).timeout(const Duration(seconds: 12));
+      headers: {'Accept': 'application/json'},
+    ).timeout(const Duration(seconds: 15));
 
-    return response.statusCode == 201;
+    if (response.statusCode != 200) {
+      throw Exception('History API returned HTTP ${response.statusCode}.');
+    }
+
+    final decoded = jsonDecode(response.body);
+    final data = decoded is Map<String, dynamic> ? decoded['data'] : null;
+    if (data is! List) {
+      throw Exception('The history API returned an invalid response.');
+    }
+    return data.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw Exception('The history API returned an invalid reading.');
+      }
+      return SensorReading.fromJson(item);
+    }).toList();
   }
 
-  /// Generates synthetic sensor reading for simulation or offline fallback
-  static SensorReading generateMockReading([SensorReading? previous]) {
-    final rnd = Random();
-    final prev = previous ??
-        SensorReading(
-          deviceId: 'ESP32_002',
-          temperature: 26.5,
-          humidity: 62.0,
-          co2: 520.0,
-          co: 1.2,
-          no2: 18.5,
-          timestamp: DateTime.now(),
-        );
-
-    final deltaTemp = (rnd.nextDouble() - 0.48) * 0.4;
-    final deltaHum = (rnd.nextDouble() - 0.5) * 0.8;
-    final deltaCo2 = (rnd.nextDouble() - 0.48) * 35;
-    final deltaCo = (rnd.nextDouble() - 0.5) * 0.2;
-    final deltaNo2 = (rnd.nextDouble() - 0.5) * 1.2;
-
-    return SensorReading(
-      deviceId: prev.deviceId,
-      temperature: double.parse((prev.temperature + deltaTemp).clamp(18.0, 38.0).toStringAsFixed(1)),
-      humidity: double.parse((prev.humidity + deltaHum).clamp(25.0, 85.0).toStringAsFixed(1)),
-      co2: (prev.co2 + deltaCo2).clamp(350.0, 2200.0).roundToDouble(),
-      co: double.parse((prev.co + deltaCo).clamp(0.1, 35.0).toStringAsFixed(1)),
-      no2: double.parse((prev.no2 + deltaNo2).clamp(2.0, 120.0).toStringAsFixed(1)),
-      timestamp: DateTime.now(),
-    );
+  Future<Map<String, dynamic>> checkHealth({
+    String endpoint = defaultApiUrl,
+  }) async {
+    final uri = _backendUri(endpoint, '/api/health');
+    try {
+      final response =
+          await _client.get(uri).timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) {
+        throw Exception('Health check returned HTTP ${response.statusCode}.');
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('The health API returned an invalid response.');
+      }
+      return decoded;
+    } on SocketException {
+      throw Exception(
+          'Cannot reach ${uri.host}. Check the phone internet connection.');
+    } on TimeoutException {
+      throw Exception('The server health check timed out.');
+    }
   }
+
+  void close() => _client.close();
 }

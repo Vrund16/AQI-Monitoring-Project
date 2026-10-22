@@ -26,14 +26,9 @@ class LiveStatusBar extends StatelessWidget {
         statusText = 'Syncing...';
         statusIcon = Icons.sync_rounded;
         break;
-      case ConnectionStateStatus.mock:
-        statusColor = const Color(0xFFF59E0B);
-        statusText = 'Simulation';
-        statusIcon = Icons.memory_rounded;
-        break;
       case ConnectionStateStatus.error:
         statusColor = const Color(0xFFEF4444);
-        statusText = 'Offline / Retrying';
+        statusText = 'API Offline';
         statusIcon = Icons.cloud_off_rounded;
         break;
       case ConnectionStateStatus.initial:
@@ -126,7 +121,8 @@ class LiveStatusBar extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                color:
+                    isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -147,7 +143,8 @@ class LiveStatusBar extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                color:
+                    isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
                 shape: BoxShape.circle,
               ),
               child: Icon(

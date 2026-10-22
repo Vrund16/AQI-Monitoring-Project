@@ -67,35 +67,86 @@ class DashboardScreen extends StatelessWidget {
         onRefresh: () => aqi.refreshData(),
         color: const Color(0xFF10B981),
         child: reading == null
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFF10B981)),
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                padding: const EdgeInsets.all(20),
+                children: [
+                  const SizedBox(height: 12),
+                  const LiveStatusBar(),
+                  const SizedBox(height: 70),
+                  Icon(
+                    aqi.status == ConnectionStateStatus.error
+                        ? Icons.cloud_off_rounded
+                        : Icons.sensors_rounded,
+                    size: 52,
+                    color: aqi.status == ConnectionStateStatus.error
+                        ? Colors.redAccent
+                        : const Color(0xFF10B981),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    aqi.status == ConnectionStateStatus.error
+                        ? 'Live readings unavailable'
+                        : 'Connecting to live sensor',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  if (aqi.errorMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      aqi.errorMessage!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  Center(
+                    child: ElevatedButton.icon(
+                      onPressed: () => aqi.refreshData(),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Retry live API'),
+                    ),
+                  ),
+                ],
               )
             : ListView(
                 physics: const AlwaysScrollableScrollPhysics(
                   parent: BouncingScrollPhysics(),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 children: [
                   if (aqi.status == ConnectionStateStatus.error)
                     Container(
                       margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
                       decoration: BoxDecoration(
                         color: Colors.amber.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.amber.withOpacity(0.35)),
+                        border:
+                            Border.all(color: Colors.amber.withOpacity(0.35)),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.info_outline_rounded, size: 18, color: Colors.amber),
+                          const Icon(Icons.info_outline_rounded,
+                              size: 18, color: Colors.amber),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Connecting to Render Cloud (free tier may take ~30s to wake up). Showing active telemetry.',
+                              aqi.errorMessage == null
+                                  ? 'Could not refresh live readings. Showing the last successful API reading.'
+                                  : 'Live API connection failed: ${aqi.errorMessage}',
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: Theme.of(context).brightness == Brightness.dark
+                                color: Theme.of(context).brightness ==
+                                        Brightness.dark
                                     ? Colors.amber[200]
                                     : Colors.amber[900],
                               ),
@@ -124,7 +175,7 @@ class DashboardScreen extends StatelessWidget {
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                     child: Text(
-                      'Gas Sensors Telemetry',
+                      'Gas sensor telemetry',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,

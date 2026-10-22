@@ -27,24 +27,30 @@ class SensorReading {
     return SensorReading(
       id: json['_id'] as String?,
       deviceId: json['deviceId']?.toString() ?? 'ESP32_DEV',
-      temperature: _toDouble(json['temperature'], 24.0),
-      humidity: _toDouble(json['humidity'], 50.0),
-      co2: _toDouble(json['co2'], 450.0),
-      co: _toDouble(json['co'], 0.5),
-      no2: _toDouble(json['no2'], 15.0),
+      temperature: _toDouble(json['temperature'], 'temperature'),
+      humidity: _toDouble(json['humidity'], 'humidity'),
+      co2: _toDouble(json['co2'], 'co2'),
+      co: _toDouble(json['co'], 'co'),
+      no2: _toDouble(json['no2'], 'no2'),
       timestamp: json['createdAt'] != null
           ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
           : (json['timestamp'] != null
-              ? DateTime.tryParse(json['timestamp'].toString()) ?? DateTime.now()
+              ? DateTime.tryParse(json['timestamp'].toString()) ??
+                  DateTime.now()
               : DateTime.now()),
     );
   }
 
-  static double _toDouble(dynamic value, double fallback) {
-    if (value == null) return fallback;
-    if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value) ?? fallback;
-    return fallback;
+  static double _toDouble(dynamic value, String field) {
+    final parsed = value is num
+        ? value.toDouble()
+        : value is String
+            ? double.tryParse(value)
+            : null;
+    if (parsed == null || !parsed.isFinite) {
+      throw FormatException('Missing or invalid "$field" sensor value.');
+    }
+    return parsed;
   }
 
   Map<String, dynamic> toJson() => {
@@ -66,12 +72,12 @@ class SensorReading {
 
   String get aqiCategory {
     final score = compositeScore;
-    if (score <= 50) return 'GOOD';
-    if (score <= 100) return 'MODERATE';
-    if (score <= 150) return 'UNHEALTHY FOR SENSITIVE';
-    if (score <= 200) return 'UNHEALTHY';
-    if (score <= 300) return 'VERY UNHEALTHY';
-    return 'HAZARDOUS';
+    if (score <= 50) return 'Good';
+    if (score <= 100) return 'Moderate';
+    if (score <= 150) return 'Unhealthy for sensitive groups';
+    if (score <= 200) return 'Unhealthy';
+    if (score <= 300) return 'Very unhealthy';
+    return 'Hazardous';
   }
 
   Color get aqiColor {
@@ -104,14 +110,15 @@ class SensorReading {
 
   String get healthSummary {
     if (compositeScore <= 50) {
-      return 'Air quality is pristine. Perfect conditions for outdoor activities and fresh ventilation.';
-    } else if (compositeScore <= 100) {
-      return 'Air quality is acceptable. Sensitive individuals may consider limiting prolonged outdoor exertion.';
-    } else if (compositeScore <= 150) {
-      return 'Elevated pollutant levels. Vulnerable groups may experience cough or shortness of breath.';
-    } else {
-      return 'Hazardous concentration detected! Keep windows closed, turn on air purifiers, and wear protective masks outdoors.';
+      return 'Air quality is pristine. Conditions are suitable for outdoor activities and fresh ventilation.';
     }
+    if (compositeScore <= 100) {
+      return 'Air quality is acceptable. Sensitive individuals may consider limiting prolonged outdoor exertion.';
+    }
+    if (compositeScore <= 150) {
+      return 'Pollutant levels are elevated. Sensitive groups may experience symptoms; consider reducing prolonged outdoor activity.';
+    }
+    return 'Pollutant levels are high. Limit outdoor exposure, improve indoor filtration, and monitor conditions.';
   }
 
   SensorReading copyWith({
